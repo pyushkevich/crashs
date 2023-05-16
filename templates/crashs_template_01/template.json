@@ -1,0 +1,23 @@
+{
+    "sides": {
+        "left": {
+            "mesh": "template_shoot_left.vtk"
+        }, 
+        "right": {
+            "mesh": "template_shoot_right.vtk"
+        }
+    },
+    "ashs_label_type": {
+        "wm": [20],
+        "gm": [1, 2, 10, 11, 12, 13],
+        "bg": [0, 4, 6, 7, 9, 14, 16, 17, 18, 19]    
+    },
+    "labels_for_surface_matching": [ 20, 1, 2, 10, 11, 12, 13 ],
+    "registration": {
+        "varifold_sigma": 5.0,
+        "lddmm_sigma": 5.0,
+        "lddmm_gamma": 1.0,
+        "lddmm_nt": 10
+    }
+}
+
