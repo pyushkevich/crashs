@@ -525,15 +525,15 @@ device = torch.device(args.device) if torch.cuda.is_available() else 'cpu'
 
 # Convert the inputs into probability maps
 print("Converting ASHS-T1 posteriors to CRUISE inputs")
-#ashs_output_to_cruise_input(template, ashs.posteriors, workspace)
+ashs_output_to_cruise_input(template, ashs.posteriors, workspace)
 
 # Run CRUISE on the inputs
 print("Running CRUISE to correct topology and compute inflated surface")
-#run_cruise(workspace, overwrite=True)
+run_cruise(workspace, overwrite=True)
 
 # Perform postprocessing
 print("Mapping ASHS labels on the inflated template")
-#cruise_postproc(template, ashs, workspace)
+cruise_postproc(template, ashs, workspace)
 
 # Perform the registration
 print("Registering template to subject")
