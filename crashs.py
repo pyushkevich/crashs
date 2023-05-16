@@ -359,7 +359,7 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
     dloss = lossVarifoldSurfWithLabels(
         md_template.ft, md_subject.vt, md_subject.ft,
         md_template.lpt, md_subject.lpt, 
-        GaussLinKernelWithLabels(sigma_varifold))
+        GaussLinKernelWithLabels(sigma_varifold, md_template.lp.shape[1]))
 
     # Overall LDDMM loss
     nt = template.get_lddmm_nt()

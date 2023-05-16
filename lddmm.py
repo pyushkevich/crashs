@@ -21,8 +21,8 @@ def GaussLinKernel(sigma):
     return (K * b).sum_reduction(axis=1)
 
 # For Varifold
-def GaussLinKernelWithLabels(sigma):
-    x, y, u, v, lx, ly, b = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3), Vi(4, 5), Vj(5, 5), Vj(6, 1)
+def GaussLinKernelWithLabels(sigma, nlabels):
+    x, y, u, v, lx, ly, b = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3), Vi(4, nlabels), Vj(5, nlabels), Vj(6, 1)
     gamma = 1 / (sigma * sigma)
     D2 = x.sqdist(y)
     K = (-D2 * gamma).exp() * (u * v).sum() ** 2 * (lx * ly).sum()
@@ -37,7 +37,7 @@ def GaussLinCurrentsKernel(sigma):
     return K.sum_reduction(axis=1)
 
 # For Currents
-def GaussLinCurrentsKernelWithLabels(sigma):
+def GaussLinCurrentsKernelWithLabels(sigma, nlabels):
     x, y, u, v, lx, ly = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3), Vi(4, 5), Vj(5, 5)
     gamma = 1 / (sigma * sigma)
     D2 = x.sqdist(y)
