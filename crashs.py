@@ -9,6 +9,8 @@ import argparse
 import json
 import pathlib
 import geomloss
+import subprocess
+import time
 from vtkutil import *
 from lddmm import *
 
@@ -19,7 +21,9 @@ class MeshData:
         self.v, self.f = vtk_get_points(self.pd), vtk_get_triangles(self.pd)
         self.lp = vtk_get_cell_array(self.pd, 'plab')
         if target_faces:
-            self.v, self.f = decimate(self.v, self.f, target_faces)
+            vd, fd = decimate(self.v, self.f, target_faces)
+            self.lp = vtk_sample_cell_array_at_vertices(self.pd, self.lp, vd)
+            self.v, self.f = vd, fd
         self.vt = torch.tensor(self.v, dtype=torch.float32, device=device).contiguous()
         self.ft = torch.tensor(self.f, dtype=torch.long, device=device).contiguous()
         self.lpt = torch.tensor(self.lp, dtype=torch.float32, device=device).contiguous()
@@ -113,12 +117,20 @@ class Workspace:
         def fn_fit(suffix):
             return os.path.join(self.fit_dir, f'{self.expid}_{suffix}')
 
+        self.affine_moving = fn_fit('affine_moving.vtk')
+        self.affine_moving_reduced = fn_fit('affine_moving_reduced.vtk')
+        self.affine_matrix = fn_fit('affine_matrix.mat')
+        self.fit_template = fn_fit('fit_template.vtk')
         self.fit_target = fn_fit('fit_target.vtk')
+        self.fit_target_reduced = fn_fit('fit_target_reduced.vtk')
+        self.fit_template_reduced = fn_fit('fit_template_reduced.vtk')
+        self.fit_lddmm_momenta_reduced = fn_fit('fit_lddmm_momenta_reduced.vtk')
         self.fit_lddmm_momenta = fn_fit('fit_lddmm_momenta.vtk')
         self.fit_lddmm_result = fn_fit('fitted_lddmm_template.vtk')
         self.fit_omt_match = fn_fit('fitted_omt_match.vtk')
         self.fit_omt_hw_target = fn_fit('fitted_omt_hw_target.vtk')
         self.fit_omt_match_to_hw = fn_fit('fitted_omt_match_to_hw.vtk')
+        self.fit_dist_stat = fn_fit('fitted_dist_stat.json')
 
 
 
@@ -326,28 +338,104 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
     plab = scipy.special.softmax(plab * 10., axis=1)    
     vtk_set_point_array(pd_infl, 'plab', plab)
 
+    # Convert to a cell array
+    pd_infl = vtk_all_point_arrays_to_cell_arrays(pd_infl) 
+
     # Save the mesh under a new name
     save_vtk(pd_infl, workspace.cruise_infl_mesh_labeled)
 
-    # Apply the affine transform, taking the mesh to template space
+    # Apply the affine transform from ASHS, taking the mesh to template space
     M = np.linalg.inv(ashs.affine_to_template)
     x_infl = x_infl @ M[:3,:3].T + M[:3,3:].T 
     vtk_set_points(pd_infl, x_infl)
-    save_vtk(pd_infl, workspace.fit_target)
+    save_vtk(pd_infl, workspace.affine_moving)
+
+    # Save a local copy of the template with the label array as a point
+    # array (which matches the target)
+    save_vtk(template.pd, workspace.fit_template)
 
     # Return the pd
     return pd_infl
 
 
 # LDDMM registration between the template and the individual inflated mesh
-def subject_to_template_registration(template:Template, workspace: Workspace, device):
+# using lmshoot (much faster on the CPU than pykeops)
+def subject_to_template_registration_fast_cpu(template:Template, workspace: Workspace, device, reduction=None):
 
     # Load the template and put on the device
-    md_template = MeshData(template.pd, device)
+    md_template = MeshData(template.pd, device, reduction)
+
+    # Load the subject and put on the device
+    md_subject = MeshData(load_vtk(workspace.affine_moving), device, reduction)
+
+    # Export the two reduced meshes
+    def export_reduced(md, fn):
+        pd_reduced = vtk_make_pd(md.v, md.f)
+        pd_reduced = vtk_set_point_array(pd_reduced, 'plab', md.lp)
+        pd_reduced = vtk_all_point_arrays_to_cell_arrays(pd_reduced)
+        vtk_set_point_array(pd_reduced, 'label', np.argmax(md.lp, axis=1))
+        save_vtk(pd_reduced, fn)
+
+    export_reduced(md_template, workspace.fit_template_reduced) 
+    export_reduced(md_subject, workspace.affine_moving_reduced) 
+
+    # Call ml_affine for affine registration
+    cmd = (f'ml_affine -m label {workspace.affine_moving_reduced} '
+           f'{workspace.fit_template_reduced} {workspace.affine_matrix}')
+    print('Executing: ', cmd)
+    subprocess.run(cmd, shell=True)
+
+    # Apply the affine registration
+    maff = np.loadtxt(workspace.affine_matrix)
+    pd_moving = load_vtk(workspace.affine_moving_reduced)
+    x_moving = vtk_get_points(pd_moving)
+    x_moving = x_moving @ maff[:3,:3].T + maff[:3,3:].T
+    vtk_set_points(pd_moving, x_moving)
+    save_vtk(pd_moving, workspace.fit_target_reduced)
+
+    # Also apply the affine registration to the full model
+    pd_moving_full = load_vtk(workspace.affine_moving)
+    x_moving_full = vtk_get_points(pd_moving_full)
+    x_moving_full = x_moving_full @ maff[:3,:3].T + maff[:3,3:].T
+    vtk_set_points(pd_moving_full, x_moving_full)
+    save_vtk(pd_moving_full, workspace.fit_target)
+
+    # Parameter dictionary for the commands we are going to run
+    cmd_param = {
+        'template': workspace.fit_template_reduced,
+        'template_full': workspace.fit_template,
+        'target': workspace.fit_target_reduced,
+        'fitted_full': workspace.fit_lddmm_result,
+        'momenta': workspace.fit_lddmm_momenta_reduced,
+        'sigma_lddmm': template.get_lddmm_sigma() / np.sqrt(2.0),
+        'gamma': template.get_lddmm_gamma(),
+        'steps': template.get_lddmm_nt(),
+        'sigma_varifold': template.get_varifold_sigma() / np.sqrt(2.0)
+    }
+
+    # Run lmshoot to match to template
+    cmd = ('lmshoot -d 3 -m {template} {target} -o {momenta} '
+           '-s {sigma_lddmm} -l {gamma} -n {steps} -a V '
+           '-S {sigma_varifold} -i 100 0 -t 1 -L plab').format(**cmd_param)
+    print('Executing: ', cmd)
+    subprocess.run(cmd, shell=True)
+
+    # Run lmtowarp to apply the transformation to the full template
+    cmd = ('lmtowarp -m {momenta} -n {steps} -d 3 -s {sigma_lddmm} '
+           '-M {template_full} {fitted_full}').format(**cmd_param)
+    print('Executing: ', cmd)
+    subprocess.run(cmd, shell=True)
+
+
+# LDDMM registration between the template and the individual inflated mesh
+def subject_to_template_registration(template:Template, workspace: Workspace, device, reduction=None):
+
+    # Load the template and put on the device
+    md_template = MeshData(template.pd, device, reduction)
 
     # Load the subject and put on the device
     pd_subj = load_vtk(workspace.fit_target)
-    md_subject = MeshData(pd_subj, device)
+    md_subject = MeshData(pd_subj, device, reduction)
 
     # Set the sigma tensors
     sigma_varifold = torch.tensor(
@@ -407,67 +495,73 @@ def subject_to_template_fit_omt(template:Template, workspace: Workspace, device)
     pd_subject = load_vtk(workspace.fit_target)
     md_subject = MeshData(pd_subject, device)
 
-    # Compute the centers and weights of the fitted model and target model
-    def to_measure(points, triangles):
-        """Turns a triangle into a weighted point cloud."""
+    # # Compute the centers and weights of the fitted model and target model
+    # def to_measure(points, triangles):
+    #     """Turns a triangle into a weighted point cloud."""
 
-        # Our mesh is given as a collection of ABC triangles:
-        A, B, C = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
+    #     # Our mesh is given as a collection of ABC triangles:
+    #     A, B, C = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
 
-        # Locations and weights of our Dirac atoms:
-        X = (A + B + C) / 3  # centers of the faces
-        S = torch.sqrt(torch.sum(torch.cross(B - A, C - A) ** 2, dim=1)) / 2  # areas of the faces
+    #     # Locations and weights of our Dirac atoms:
+    #     X = (A + B + C) / 3  # centers of the faces
+    #     S = torch.sqrt(torch.sum(torch.cross(B - A, C - A) ** 2, dim=1)) / 2  # areas of the faces
 
-        # We return a (normalized) vector of weights + a "list" of points
-        return S / torch.sum(S), X
+    #     # We return a (normalized) vector of weights + a "list" of points
+    #     return S / torch.sum(S), X
 
-    # Compute optimal transport matching
-    (a_src, x_src) = to_measure(md_fitted.vt, md_fitted.ft)
-    (a_trg, x_trg) = to_measure(md_subject.vt, md_subject.ft)
-    x_src.requires_grad_(True)
-    x_trg.requires_grad_(True)
+    # # Compute optimal transport matching
+    # (a_src, x_src) = to_measure(md_fitted.vt, md_fitted.ft)
+    # (a_trg, x_trg) = to_measure(md_subject.vt, md_subject.ft)
+    # x_src.requires_grad_(True)
+    # x_trg.requires_grad_(True)
 
-    # Generate correspondence between models using OMT
-    w_loss = geomloss.SamplesLoss("sinkhorn", p=2, blur=0.05, scaling=0.8)
-    w_loss_value = w_loss(a_src, x_src, a_trg, x_trg)
-    [w_loss_grad] = torch.autograd.grad(w_loss_value, x_src)
-    w_match = x_src - w_loss_grad / a_src[:, None]
+    # # Generate correspondence between models using OMT
+    # t_start = time.time()
+    # w_loss = geomloss.SamplesLoss("sinkhorn", p=2, blur=0.05, scaling=0.8, backend='multiscale', verbose=True)
+    # w_loss_value = w_loss(a_src, x_src, a_trg, x_trg)
+    # print('Forward pass completed')
+    # [w_loss_grad] = torch.autograd.grad(w_loss_value, x_src)
+    # w_match = x_src - w_loss_grad / a_src[:, None]
+    # t_end = time.time()
     
-    print(f'OMT matching distance: {w_loss_value.item()}')
+    # print(f'OMT matching distance: {w_loss_value.item()}, time elapsed: {t_end-t_start}')
     
-    # The matches are the locations where the centers of the triangles want to move to
-    # on the target mesh. Now we need to map this into the corresponding point matches
-    pd_test_sinkhorn = vtk_clone_pd(pd_fitted)
-    vtk_set_cell_array(pd_test_sinkhorn, 'match', w_match.detach().cpu().numpy())
-    filter = vtk.vtkCellDataToPointData()
-    filter.SetInputData(pd_test_sinkhorn)
-    filter.Update()
-    vtk_set_points(pd_test_sinkhorn, vtk_get_point_array(filter.GetOutput(), 'match'))
-    save_vtk(pd_test_sinkhorn, workspace.fit_omt_match)
+    # # The matches are the locations where the centers of the triangles want to move to
+    # # on the target mesh. Now we need to map this into the corresponding point matches
+    # pd_test_sinkhorn = vtk_clone_pd(pd_fitted)
+    # vtk_set_cell_array(pd_test_sinkhorn, 'match', w_match.detach().cpu().numpy())
+    # filter = vtk.vtkCellDataToPointData()
+    # filter.SetInputData(pd_test_sinkhorn)
+    # filter.Update()
+    # vtk_set_points(pd_test_sinkhorn, vtk_get_point_array(filter.GetOutput(), 'match'))
+    # save_vtk(pd_test_sinkhorn, workspace.fit_omt_match)
 
     # The last thing we want to do is to project template sampling locations into the
     # halfway surface in the subject native space
     pd_hw = load_vtk(workspace.cruise_l2m_mesh)
-    x_hw = vtk_get_points(pd_hw)
-    f_hw = vtk_get_triangles(pd_hw)
 
     # Apply RAS transform to the halfway mesh from CRUISE
     _, img_ref = next(iter(ashs.posteriors.items()))
     sform = get_image_sform(img_ref)
-    x_hw = x_hw @ sform[:3,:3].T + sform[:3,3:].T
+    x_hw = vtk_get_points(pd_hw) @ sform[:3,:3].T + sform[:3,3:].T
     vtk_set_points(pd_hw, x_hw)
 
     # Also load the label probability maps 
-    plab_hw = vtk_get_point_array(load_vtk(workspace.cruise_infl_mesh_labeled), 'plab')
-    vtk_set_point_array(pd_hw, 'plab', plab_hw)
+    plab_hw = vtk_get_cell_array(load_vtk(workspace.cruise_infl_mesh_labeled), 'plab')
+    vtk_set_cell_array(pd_hw, 'plab', plab_hw)
     save_vtk(pd_hw, workspace.fit_omt_hw_target)
+
+    # Which mesh to use for sampling
+    pd_sample = pd_fitted 
+    # pd_sample = pd_test_sinkhorn
 
     # Use the locator to sample from the halfway mesh
     loc = vtk.vtkCellLocator()
     loc.SetDataSet(pd_subject)
-    # x = vtk_get_points(pd_test_sinkhorn)
-    x = md_fitted.v
+    loc.BuildLocator()
+    x = vtk_get_points(pd_fitted)
     x_to_subj = np.zeros_like(x)
+    x_dist = np.zeros(x.shape[0])
     
     cellId = vtk.reference(0)
     c = [0.0, 0.0, 0.0]
@@ -481,10 +575,25 @@ def subject_to_template_fit_omt(template:Template, workspace: Workspace, device)
         pd_subject.GetCell(cellId).EvaluatePosition(x[j,:], c, subId, pcoord, d, wgt)
         pd_hw.GetCell(cellId).EvaluateLocation(subId, pcoord, xj, wgt)
         x_to_subj[j,:] = np.array(xj)
+        x_dist[j] = np.sqrt(d.get())
 
     # Save the template locations in halfway mesh
-    vtk_set_points(pd_test_sinkhorn, x_to_subj)
-    save_vtk(pd_test_sinkhorn, workspace.fit_omt_match_to_hw)
+    vtk_set_points(pd_fitted, x_to_subj)
+    vtk_set_point_array(pd_fitted, 'dist', x_dist)
+    save_vtk(pd_fitted, workspace.fit_omt_match_to_hw)
+
+    # Compute distance statistics
+    dist_stat = {
+        'mean': np.mean(x_dist),
+        'rms': np.sqrt(np.mean(x_dist ** 2)),
+        'q95': np.quantile(x_dist, 0.95),
+        'max': np.max(x_dist)
+    }
+
+    # Write distance statistics
+    with open(workspace.fit_dist_stat, 'wt') as jsonfile:
+        json.dump(dist_stat, jsonfile)
+
 
 
 # Create a parser
@@ -507,6 +616,8 @@ parse.add_argument('-c', '--correction-mode', type=str, choices=['heur', 'corr_u
                    help='Which ASHS correction output to select', default='corr_usegray')                   
 parse.add_argument('-d', '--device', type=str, 
                    help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
+parse.add_argument('-r', '--reduction', type=float, 
+                   help='Reduction to apply to meshes for geodesic shooting', default=None)
 args = parse.parse_args()
 
 # Load the template
@@ -537,7 +648,7 @@ cruise_postproc(template, ashs, workspace)
 
 # Perform the registration
 print("Registering template to subject")
-subject_to_template_registration(template, workspace, device)
+subject_to_template_registration_fast_cpu(template, workspace, device, args.reduction)
 
 # Perform the OMT matching
 print("Matching template to subject using OMT")
