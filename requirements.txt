@@ -1,0 +1,7 @@
+numpy
+torch
+pykeops
+pymeshlab
+vtk
+SimpleITK
+geomloss
