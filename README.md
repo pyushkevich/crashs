@@ -2,7 +2,7 @@
 CRASHS is a surface-based modeling and groupwise registration pipeline for the human medial temporal lobe (MTL). It is used to postprocess the results of [ASHS](https://github.com/pyushkevich/ashs) segmentation with ASHS atlases that contain a white matter label. CRASHS uses the [CRUISE](https://doi.org/10.1016/j.neuroimage.2004.06.043) technique implemented in the [NighRes software](https://nighres.readthedocs.io/en/latest/) to fit the white matter segmentation with a surface of spherical topology, and find a series of surfaces spanning between the gray/white boundary and the pial surface. The middle surface is inflated and registered to a population template, allowing surface-based analysis of MTL cortical thickness and other measures such as functional MRI and diffusion MRI. 
 
 ## Inputs
-The main input to the package is the ASHS output folder.
+The main input to the package is the ASHS-T1 output folder. ASHS should be run using the new [ASHS-T1 atlas with the white matter label](https://www.nitrc.org/frs/downloadlink.php/13554).
 
 ## Docker
 This repository includes the CRASHS scripts and a `Dockerfile`. The official container on DockerHub is labeled `pyushkevich/crashs:latest`
@@ -14,5 +14,9 @@ A sample dataset is also provided and can be processed as follows (also see `run
 
     docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
     ./crashs.py -s right -r 0.1 sample_data/035_S_4082_2011-06-28 templates/crashs_template_01 /data/test
+
+## Citation
+* PA Yushkevich, L Xie, LEM Wisse, M Dong, S Ravikumar, R Ittyerah,  R de Flores, SR Das, DA Wolk for the Alzheimer’s Disease Neuroimaging Initiative (ADNI), Mapping Medial Temporal Lobe Longitudinal Change in Preclinical Alzheimer’s Disease, 2023 Alzheimer's Association International Conference (AAIC 2023).
+
 
     
