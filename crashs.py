@@ -90,6 +90,14 @@ class ASHSFolder:
 
 class Workspace:
 
+    # Define output files
+    def fn_cruise(suffix):
+        return os.path.join(self.cruise_dir, f'{self.expid}_{suffix}')
+
+    # Define output files
+    def fn_fit(suffix):
+        return os.path.join(self.fit_dir, f'{self.expid}_{suffix}')
+
     def __init__(self, output_dir, expid):
         self.output_dir = output_dir
         self.expid = expid
@@ -100,37 +108,29 @@ class Workspace:
         os.makedirs(self.cruise_dir, exist_ok=True)
         os.makedirs(self.fit_dir, exist_ok=True)
 
-        # Define output files
-        def fn_cruise(suffix):
-            return os.path.join(self.cruise_dir, f'{self.expid}_{suffix}')
-
         self.cruise_fn_base = f'{self.expid}_mtl'
-        self.cruise_wm_prob = fn_cruise('wm_prob.nii.gz')
-        self.cruise_gm_prob = fn_cruise('gm_prob.nii.gz')
-        self.cruise_bg_prob = fn_cruise('bg_prob.nii.gz')
-        self.cruise_wm_mask = fn_cruise('wm_mask_lcomp.nii.gz')
-        self.cruise_l2m_mesh = fn_cruise('mtl_l2m-mesh.vtk')
-        self.cruise_infl_mesh = fn_cruise('mtl_infl-mesh.vtk')
-        self.cruise_infl_mesh_labeled = fn_cruise('mtl_infl-mesh-ras-labeled.vtk')
+        self.cruise_wm_prob = self.fn_cruise('wm_prob.nii.gz')
+        self.cruise_gm_prob = self.fn_cruise('gm_prob.nii.gz')
+        self.cruise_bg_prob = self.fn_cruise('bg_prob.nii.gz')
+        self.cruise_wm_mask = self.fn_cruise('wm_mask_lcomp.nii.gz')
+        self.cruise_infl_mesh = self.fn_cruise('mtl_avg_infl-mesh.vtk')
+        self.cruise_infl_mesh_labeled = self.fn_cruise('mtl_avg_infl-mesh-ras-labeled.vtk')
+        self.cruise_middepth_mesh = self.fn_cruise('mtl_mesh-p2.vtk')
 
-        # Define output files
-        def fn_fit(suffix):
-            return os.path.join(self.fit_dir, f'{self.expid}_{suffix}')
-
-        self.affine_moving = fn_fit('affine_moving.vtk')
-        self.affine_moving_reduced = fn_fit('affine_moving_reduced.vtk')
-        self.affine_matrix = fn_fit('affine_matrix.mat')
-        self.fit_template = fn_fit('fit_template.vtk')
-        self.fit_target = fn_fit('fit_target.vtk')
-        self.fit_target_reduced = fn_fit('fit_target_reduced.vtk')
-        self.fit_template_reduced = fn_fit('fit_template_reduced.vtk')
-        self.fit_lddmm_momenta_reduced = fn_fit('fit_lddmm_momenta_reduced.vtk')
-        self.fit_lddmm_momenta = fn_fit('fit_lddmm_momenta.vtk')
-        self.fit_lddmm_result = fn_fit('fitted_lddmm_template.vtk')
-        self.fit_omt_match = fn_fit('fitted_omt_match.vtk')
-        self.fit_omt_hw_target = fn_fit('fitted_omt_hw_target.vtk')
-        self.fit_omt_match_to_hw = fn_fit('fitted_omt_match_to_hw.vtk')
-        self.fit_dist_stat = fn_fit('fitted_dist_stat.json')
+        self.affine_moving = self.fn_fit('affine_moving.vtk')
+        self.affine_moving_reduced = self.fn_fit('affine_moving_reduced.vtk')
+        self.affine_matrix = self.fn_fit('affine_matrix.mat')
+        self.fit_template = self.fn_fit('fit_template.vtk')
+        self.fit_target = self.fn_fit('fit_target.vtk')
+        self.fit_target_reduced = self.fn_fit('fit_target_reduced.vtk')
+        self.fit_template_reduced = self.fn_fit('fit_template_reduced.vtk')
+        self.fit_lddmm_momenta_reduced = self.fn_fit('fit_lddmm_momenta_reduced.vtk')
+        self.fit_lddmm_momenta = self.fn_fit('fit_lddmm_momenta.vtk')
+        self.fit_lddmm_result = self.fn_fit('fitted_lddmm_template.vtk')
+        self.fit_omt_match = self.fn_fit('fitted_omt_match.vtk')
+        self.fit_omt_hw_target = self.fn_fit('fitted_omt_hw_target.vtk')
+        self.fit_omt_match_to_hw = self.fn_fit('fitted_omt_match_to_hw.vtk')
+        self.fit_dist_stat = self.fn_fit('fitted_dist_stat.json')
 
 
 
@@ -233,16 +233,19 @@ def run_cruise(workspace:Workspace, overwrite=False):
       file_name=fn_base,
       output_dir=out_dir)
 
-  # Extract halfway surface
-  cortical_surface = nighres.surface.levelset_to_mesh(
-                          levelset_image=cruise['avg'],
-                          save_data=True,
-                          overwrite=overwrite,
-                          file_name=f'{fn_base}.vtk',
-                          output_dir=out_dir)
+  # Extract average surface, grey-white surface and grey-csf surface as meshes
+  cortical_surface = {}
+  for lset in ('avg', 'cgb', 'gwb'):
+    # Extract the level set
+    cortical_surface[lset] = nighres.surface.levelset_to_mesh(
+        levelset_image=cruise['avg'],
+        save_data=True,
+        overwrite=overwrite,
+        file_name=f'{fn_base}_{lset}.vtk',
+        output_dir=out_dir)    
 
   inflated_surface = nighres.surface.surface_inflation(
-                          surface_mesh=cortical_surface['result'],
+                          surface_mesh=cortical_surface['avg']['result'],
                           save_data=True,
                           file_name=f'{fn_base}.vtk',
                           output_dir=out_dir, 
@@ -318,7 +321,7 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
     x_infl = vtk_get_points(pd_infl)
 
     # Load the midway mesh - should use it to sample
-    pd_hw = load_vtk(workspace.cruise_l2m_mesh)
+    pd_hw = load_vtk(workspace.cruise_middepth_mesh)
     x = vtk_get_points(pd_hw)
 
     # Sample the posterior at mesh coordinates
@@ -343,6 +346,15 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
 
     # Save the mesh under a new name
     save_vtk(pd_infl, workspace.cruise_infl_mesh_labeled)
+
+    # Also save the grey/white and grey/csf meshes from CRUISE in RAS space
+    # This is only for visualization purposes
+    for lset in ('cgb', 'gwb'):
+        pd_lset = load_vtk(workspace.fn_cruise(f'mtl_{lset}_l2m-mesh.vtk'))
+        x_lset = vtk_get_points(pd_lset)
+        x_lset = x_lset @ sform[:3,:3].T + sform[:3,3:].T
+        vtk_set_points(pd_lset, x_lset)
+        save_vtk(pd_lset, workspace.fn_cruise(f'mtl_{lset}_l2m-mesh-ras.vtk'))
 
     # Apply the affine transform from ASHS, taking the mesh to template space
     M = np.linalg.inv(ashs.affine_to_template)
@@ -538,7 +550,7 @@ def subject_to_template_fit_omt(template:Template, workspace: Workspace, device)
 
     # The last thing we want to do is to project template sampling locations into the
     # halfway surface in the subject native space
-    pd_hw = load_vtk(workspace.cruise_l2m_mesh)
+    pd_hw = load_vtk(workspace.cruise_middepth_mesh)
 
     # Apply RAS transform to the halfway mesh from CRUISE
     _, img_ref = next(iter(ashs.posteriors.items()))
