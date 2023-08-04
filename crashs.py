@@ -91,11 +91,11 @@ class ASHSFolder:
 class Workspace:
 
     # Define output files
-    def fn_cruise(suffix):
+    def fn_cruise(self, suffix):
         return os.path.join(self.cruise_dir, f'{self.expid}_{suffix}')
 
     # Define output files
-    def fn_fit(suffix):
+    def fn_fit(self, suffix):
         return os.path.join(self.fit_dir, f'{self.expid}_{suffix}')
 
     def __init__(self, output_dir, expid):
@@ -238,7 +238,7 @@ def run_cruise(workspace:Workspace, overwrite=False):
   for lset in ('avg', 'cgb', 'gwb'):
     # Extract the level set
     cortical_surface[lset] = nighres.surface.levelset_to_mesh(
-        levelset_image=cruise['avg'],
+        levelset_image=cruise[lset],
         save_data=True,
         overwrite=overwrite,
         file_name=f'{fn_base}_{lset}.vtk',
@@ -247,7 +247,7 @@ def run_cruise(workspace:Workspace, overwrite=False):
   inflated_surface = nighres.surface.surface_inflation(
                           surface_mesh=cortical_surface['avg']['result'],
                           save_data=True,
-                          file_name=f'{fn_base}.vtk',
+                          file_name=f'{fn_base}_avg.vtk',
                           output_dir=out_dir, 
                           overwrite=overwrite,
                           step_size=0.1,
@@ -259,6 +259,7 @@ def run_cruise(workspace:Workspace, overwrite=False):
                           inner_levelset=cruise['gwb'],
                           outer_levelset=cruise['cgb'],
                           n_layers=4,
+                          method='distance-preserving',
                           save_data=True,
                           overwrite=overwrite,
                           file_name=fn_base,
@@ -267,7 +268,7 @@ def run_cruise(workspace:Workspace, overwrite=False):
   # Generate corresponding surfaces at different layers
   profile_meshing = nighres.laminar.profile_meshing(
                           profile_surface_image=depth['boundaries'],
-                          starting_surface_mesh=cortical_surface['result'],
+                          starting_surface_mesh=cortical_surface['avg']['result'],
                           save_data=True,
                           overwrite=overwrite,
                           file_name=f'{fn_base}.vtk',
