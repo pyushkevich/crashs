@@ -1,5 +1,5 @@
 # Using the 2023a build of our utilities as the base
-FROM pyushkevich/tk:2023a
+FROM pyushkevich/tk:2023b
 
 # Install nighres prerequisites
 RUN echo "deb http://archive.ubuntu.com/ubuntu/ bionic main universe" >> /etc/apt/sources.list
