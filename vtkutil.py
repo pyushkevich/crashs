@@ -118,6 +118,29 @@ def vtk_sample_cell_array_at_vertices(pd, arr_in, x):
         loc.FindClosestPoint(x[j,:], c, cellId, subId, d)
         arr_out[j,:] = arr_in[cellId, :]
     return arr_out
+    
+
+# Map an array to new vertex locations
+def vtk_sample_point_array_at_vertices(pd_src, array, x_samples):
+    # Use the locator to sample from the halfway mesh
+    loc = vtk.vtkCellLocator()
+    loc.SetDataSet(pd_src)
+    loc.BuildLocator()
+    result = np.zeros((x_samples.shape[0], array.shape[1]))    
+    cellId = vtk.reference(0)
+    c = [0.0, 0.0, 0.0]
+    subId = vtk.reference(0)
+    d = vtk.reference(0.0)
+    pcoord = [0.0, 0.0, 0.0]
+    wgt = [0.0, 0.0, 0.0]
+    xj = [0.0, 0.0, 0.0]
+    for j in range(x_samples.shape[0]):
+        loc.FindClosestPoint(x_samples[j,:], c, cellId, subId, d)
+        cell = pd_src.GetCell(cellId)
+        cell.EvaluatePosition(x_samples[j,:], c, subId, pcoord, d, wgt)
+        result[j] = np.sum(np.stack([ array[cell.GetPointId(i),:] * w for i, w in enumerate(wgt) ]), 0)
+    return result
+
 
 # Reduction using pymeshlab
 def decimate(v, f, target_faces):
@@ -150,3 +173,75 @@ def decimate(v, f, target_faces):
     # Create a new pd with the vertices and vaces
     return m0.vertex_matrix(), m0.face_matrix()
     
+
+# Taubin smoothing using MeshLab
+def taubin_smooth(v, f, lam, mu, steps):
+    # Create a pymeshlab mesh and add all the arrays to it
+    m = pymeshlab.Mesh(vertex_matrix=v, face_matrix=f)
+
+    # Create a mesh set
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(m)
+
+    # Perform Taubin smoothing
+    ms.apply_coord_taubin_smoothing(lambda_ = lam, mu = mu, stepsmoothnum = steps)
+
+    # Create a new pd with the vertices and vaces
+    m0 = ms.mesh(0)
+    return m0.vertex_matrix(), m0.face_matrix()
+
+
+# Map an array to new vertex locations
+def vtk_sample_point_array_at_vertices(pd_src, array, x_samples):
+    # Use the locator to sample from the halfway mesh
+    loc = vtk.vtkCellLocator()
+    loc.SetDataSet(pd_src)
+    loc.BuildLocator()
+    result = np.zeros((x_samples.shape[0], array.shape[1]))    
+    cellId = vtk.reference(0)
+    c = [0.0, 0.0, 0.0]
+    subId = vtk.reference(0)
+    d = vtk.reference(0.0)
+    pcoord = [0.0, 0.0, 0.0]
+    wgt = [0.0, 0.0, 0.0]
+    xj = [0.0, 0.0, 0.0]
+    for j in range(x_samples.shape[0]):
+        loc.FindClosestPoint(x_samples[j,:], c, cellId, subId, d)
+        cell = pd_src.GetCell(cellId)
+        cell.EvaluatePosition(x_samples[j,:], c, subId, pcoord, d, wgt)
+        result[j] = np.sum(np.stack([ array[cell.GetPointId(i),:] * w for i, w in enumerate(wgt) ]), 0)
+    return result
+
+
+# Given a set of sampling locations on a triangle mesh surface, generate arrays of
+# vertex indices and weights that allow data from the source mesh to be sampled at
+# the sampling locations. This can be used to interpolate point data, coordinates,
+# etc from the source mesh or spatial transformations thereof 
+def vtk_get_interpolation_arrays_for_sample(pd_src, x_samples):
+    
+    # Use the locator to sample from the halfway mesh
+    loc = vtk.vtkCellLocator()
+    loc.SetDataSet(pd_src)
+    loc.BuildLocator()
+
+    # Return data: array of vertex indices and weights
+    v_res = np.zeros((x_samples.shape[0], 3), dtype=np.int32)
+    w_res = np.zeros((x_samples.shape[0], 3), dtype=np.double)
+
+    cellId = vtk.reference(0)
+    c = [0.0, 0.0, 0.0]
+    subId = vtk.reference(0)
+    d = vtk.reference(0.0)
+    pcoord = [0.0, 0.0, 0.0]
+    wgt = [0.0, 0.0, 0.0]
+    xj = [0.0, 0.0, 0.0]
+    for j in range(x_samples.shape[0]):
+        loc.FindClosestPoint(x_samples[j,:], c, cellId, subId, d)
+        cell = pd_src.GetCell(cellId)
+        cell.EvaluatePosition(x_samples[j,:], c, subId, pcoord, d, wgt)
+        for i, w in enumerate(wgt):
+            v_res[j,i], w_res[j,i] = cell.GetPointId(i), w
+
+    return v_res, w_res
+
+

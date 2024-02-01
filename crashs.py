@@ -13,17 +13,28 @@ import subprocess
 import time
 from vtkutil import *
 from lddmm import *
+from omt import *
 
 # Class that represents a surface mesh for use in PyTorch
 class MeshData:
-    def __init__(self, pd:vtk.vtkPolyData, device, target_faces=None):
+    def __init__(self, pd:vtk.vtkPolyData, device, target_faces=None, transform=None):
         self.pd = vtk_all_point_arrays_to_cell_arrays(pd)
         self.v, self.f = vtk_get_points(self.pd), vtk_get_triangles(self.pd)
         self.lp = vtk_get_cell_array(self.pd, 'plab')
-        if target_faces:
+        if target_faces is not None:
+            # Perform decimation
             vd, fd = decimate(self.v, self.f, target_faces)
-            self.lp = vtk_sample_cell_array_at_vertices(self.pd, self.lp, vd)
+
+            # Get new cell probability labels
+            pd_tmp = vtk_make_pd(vd, fd)
+            vtk_set_point_array(pd_tmp, 'plab', vtk_sample_cell_array_at_vertices(self.pd, self.lp, vd))
+            pd_tmp = vtk_all_point_arrays_to_cell_arrays(pd_tmp)
+
             self.v, self.f = vd, fd
+            self.lp = vtk_get_cell_array(pd_tmp, 'plab')
+        if transform is not None:
+            self.v = np.einsum('ij,kj->ki', transform[:3,:3], self.v) + transform[:3,3]
+
         self.vt = torch.tensor(self.v, dtype=torch.float32, device=device).contiguous()
         self.ft = torch.tensor(self.f, dtype=torch.long, device=device).contiguous()
         self.lpt = torch.tensor(self.lp, dtype=torch.float32, device=device).contiguous()
@@ -31,13 +42,16 @@ class MeshData:
 
 # Class that represents information about a template
 class Template :
-    def __init__(self, template_dir, side):
+    def __init__(self, template_dir):
+        # Store the template directory
+        self.root = template_dir
+
         # Load the template json
         with open(os.path.join(template_dir, 'template.json')) as template_json:
             self.json = json.load(template_json)
 
-        # Load the template mesh
-        self.pd = load_vtk(os.path.join(template_dir, self.json['sides'][side]['mesh']))
+    def get_mesh(self, side):
+        return os.path.join(self.root, self.json['sides'][side]['mesh'])
 
     def get_labels_for_tissue_class(self, tissue_class):
         return self.json['ashs_label_type'][tissue_class]
@@ -56,6 +70,29 @@ class Template :
 
     def get_lddmm_nt(self):
         return self.json['registration']['lddmm_nt']
+    
+    def get_jacobian_penalty(self):
+        return self.json['registration'].get('jacobian_penalty', 0.)
+
+    def get_cruise_inflate_maxiter(self):
+        return self.json.get('cruise', dict()).get('inflate_maxiter', 500)
+
+    def get_cruise_laminar_n_layers(self):
+        return self.json.get('cruise', dict()).get('laminar_n_layers', 4)
+
+    def get_cruise_laminar_method(self):
+        return self.json.get('cruise', dict()).get('laminar_method', 'distance-preserving')
+    
+    def get_remeshing_edge_len_pct(self):
+        return self.json.get('cruise', dict()).get('remeshing_edge_length_pct', 0.75)
+    
+    def get_build_iteration_schedule(self):
+        return self.json.get('template_build', dict()).get('schedule', [10,10,10,50])
+
+    def get_build_root_sigma_factor(self):
+        return self.json.get('template_build', dict()).get('root_sigma_factor', 2.4)
+
+
 
 
         
@@ -98,9 +135,10 @@ class Workspace:
     def fn_fit(self, suffix):
         return os.path.join(self.fit_dir, f'{self.expid}_{suffix}')
 
-    def __init__(self, output_dir, expid):
+    def __init__(self, output_dir, expid, side):
         self.output_dir = output_dir
         self.expid = expid
+        self.side = side
 
         # Define and create output directories
         self.cruise_dir = os.path.join(self.output_dir, 'cruise')
@@ -115,7 +153,7 @@ class Workspace:
         self.cruise_wm_mask = self.fn_cruise('wm_mask_lcomp.nii.gz')
         self.cruise_infl_mesh = self.fn_cruise('mtl_avg_infl-mesh.vtk')
         self.cruise_infl_mesh_labeled = self.fn_cruise('mtl_avg_infl-mesh-ras-labeled.vtk')
-        self.cruise_middepth_mesh = self.fn_cruise('mtl_mesh-p2.vtk')
+        self.cruise_middepth_mesh = self.fn_cruise('mtl_avg_l2m-mesh.vtk')
 
         self.affine_moving = self.fn_fit('affine_moving.vtk')
         self.affine_moving_reduced = self.fn_fit('affine_moving_reduced.vtk')
@@ -201,7 +239,7 @@ def ashs_output_to_cruise_input(template:Template, ashs_posteriors: dict, worksp
 
 
 # Routine to run CRUISE on an example
-def run_cruise(workspace:Workspace, overwrite=False):
+def run_cruise(workspace:Workspace, template:Template, overwrite=False):
   
   # These are the inputs to CRUISE
   cortex={
@@ -251,15 +289,15 @@ def run_cruise(workspace:Workspace, overwrite=False):
                           output_dir=out_dir, 
                           overwrite=overwrite,
                           step_size=0.1,
-                          max_iter=500, 
+                          max_iter=template.get_cruise_inflate_maxiter(), 
                           method='area',
                           regularization=1.0)
 
   depth = nighres.laminar.volumetric_layering(
                           inner_levelset=cruise['gwb'],
                           outer_levelset=cruise['cgb'],
-                          n_layers=4,
-                          method='distance-preserving',
+                          n_layers=template.get_cruise_laminar_n_layers(),
+                          method=template.get_cruise_laminar_method(),
                           save_data=True,
                           overwrite=overwrite,
                           file_name=fn_base,
@@ -350,7 +388,7 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
 
     # Also save the grey/white and grey/csf meshes from CRUISE in RAS space
     # This is only for visualization purposes
-    for lset in ('cgb', 'gwb'):
+    for lset in ('cgb', 'gwb', 'avg'):
         pd_lset = load_vtk(workspace.fn_cruise(f'mtl_{lset}_l2m-mesh.vtk'))
         x_lset = vtk_get_points(pd_lset)
         x_lset = x_lset @ sform[:3,:3].T + sform[:3,3:].T
@@ -363,10 +401,6 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
     vtk_set_points(pd_infl, x_infl)
     save_vtk(pd_infl, workspace.affine_moving)
 
-    # Save a local copy of the template with the label array as a point
-    # array (which matches the target)
-    save_vtk(template.pd, workspace.fit_template)
-
     # Return the pd
     return pd_infl
 
@@ -376,7 +410,8 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
 def subject_to_template_registration_fast_cpu(template:Template, workspace: Workspace, device, reduction=None):
 
     # Load the template and put on the device
-    md_template = MeshData(template.pd, device, reduction)
+    fn_template_mesh = template.get_mesh(workspace.side)
+    md_template = MeshData(load_vtk(fn_template_mesh), device, reduction)
 
     # Load the subject and put on the device
     md_subject = MeshData(load_vtk(workspace.affine_moving), device, reduction)
@@ -416,7 +451,7 @@ def subject_to_template_registration_fast_cpu(template:Template, workspace: Work
     # Parameter dictionary for the commands we are going to run
     cmd_param = {
         'template': workspace.fit_template_reduced,
-        'template_full': workspace.fit_template,
+        'template_full': fn_template_mesh,
         'target': workspace.fit_target_reduced,
         'fitted_full': workspace.fit_lddmm_result,
         'momenta': workspace.fit_lddmm_momenta_reduced,
@@ -440,61 +475,176 @@ def subject_to_template_registration_fast_cpu(template:Template, workspace: Work
     subprocess.run(cmd, shell=True)
 
 
-# LDDMM registration between the template and the individual inflated mesh
-def subject_to_template_registration(template:Template, workspace: Workspace, device, reduction=None):
+# Affine registration between a subject and template, using varifold data term
+# and Torch optimization
+def similarity_registration_keops(md_temp, md_subj, n_iter=50, sigma_varifold=10):
 
-    # Load the template and put on the device
-    md_template = MeshData(template.pd, device, reduction)
+    # Assign the inputs to a,b (easier to debug)
+    m_a, m_b = md_subj, md_temp
 
-    # Load the subject and put on the device
-    pd_subj = load_vtk(workspace.fit_target)
-    md_subject = MeshData(pd_subj, device, reduction)
+    # LDDMM kernels
+    device = md_temp.vt.device
+    K_vari = GaussLinKernelWithLabels(torch.tensor(sigma_varifold, dtype=torch.float32, device=device), m_a.lp.shape[1])
 
-    # Set the sigma tensors
-    sigma_varifold = torch.tensor(
-        [template.get_varifold_sigma()], dtype=md_template.vt.dtype, device=device)
-    sigma_lddmm = torch.tensor(
-        [template.get_lddmm_sigma()], dtype=md_template.vt.dtype, device=device)
-
-    # Data loss with label similarity, target here is the template
-    dloss = lossVarifoldSurfWithLabels(
-        md_template.ft, md_subject.vt, md_subject.ft,
-        md_template.lpt, md_subject.lpt, 
-        GaussLinKernelWithLabels(sigma_varifold, md_template.lp.shape[1]))
-
-    # Overall LDDMM loss
-    nt = template.get_lddmm_nt()
-    loss = LDDMMloss(
-        GaussKernel(sigma=sigma_lddmm), dloss, nt, template.get_lddmm_gamma())
-
-    # Define the momenta
-    q = md_template.vt.clone().requires_grad_(True).contiguous()
-    p = torch.zeros_like(md_template.vt).requires_grad_(True).contiguous()
-
-    # Create an optimizer
-    optimizer = torch.optim.LBFGS([p], max_eval=20, max_iter=20, line_search_fn='strong_wolfe')
-
-    # Define a rigid transformation using the Rodrigues formula
-    def closure():
-        optimizer.zero_grad()
-        L = loss(p, q)
-        L.backward()
-        print(f'Loss: {L.item()}')
-        return L
+    # Define the symmetric loss for this pair
+    loss_ab = lossVarifoldSurfWithLabels(m_a.ft, m_b.vt, m_b.ft, m_a.lpt, m_b.lpt, K_vari)
+    loss_ba = lossVarifoldSurfWithLabels(m_b.ft, m_a.vt, m_a.ft, m_b.lpt, m_a.lpt, K_vari)
+    pair_theta = torch.tensor([0.01, 0.01, 0.01, 1.0, 0.0, 0.0, 0.0], 
+                              dtype=torch.float32, device=device, requires_grad=True)
     
-    for i in range(20):
+    # Create optimizer
+    opt_affine = torch.optim.LBFGS([pair_theta], max_eval=10, max_iter=10, line_search_fn='strong_wolfe')
+
+    # Define closure
+    def closure(detail=False):
+        opt_affine.zero_grad()
+
+        R = rotation_from_vector(pair_theta[0:3]) * pair_theta[3]
+        b = pair_theta[4:]
+        R_inv = torch.inverse(R)
+        b_inv = - R_inv @ b
+
+        a_to_b = (R @ m_a.vt.t()).t() + b
+        b_to_a = (R_inv @ m_b.vt.t()).t() + b_inv
+
+        L = 0.5 * (loss_ab(a_to_b) + loss_ba(b_to_a))
+        L.backward()
+        if not detail:
+            return L
+        else:
+            return L, R, b
+    
+    # Run the optimization
+    for i in range(n_iter):
+        print(f'Affine Iteration {i:03d}  Loss: {closure().item()}')
+        opt_affine.step(closure)
+
+    # Return the loss and the transformation parameters
+    loss, R, b = closure(True)
+    affine_mat = np.eye(4)
+    affine_mat[0:3,0:3] = R.detach().cpu().numpy()
+    affine_mat[0:3,  3] = b.detach().cpu().numpy()
+
+    # Print loss and record the best run/best parameters
+    return loss.item(), affine_mat
+
+
+# Fit template to subject using LDDMM and KeOps, utilizing a Jacobian penalty
+# if requested
+def lddmm_fit_subject_jac_penalty(md_temp, md_subj, n_iter=50, nt=10,
+                                  sigma_lddmm=5, sigma_varifold=10, 
+                                  gamma_lddmm=0.1, w_jac_penalty=1.0):
+
+    # LDDMM kernels
+    device = md_temp.vt.device
+    K_temp = GaussKernel(sigma=torch.tensor(sigma_lddmm, dtype=torch.float32, device=device))
+    K_vari = GaussLinKernelWithLabels(torch.tensor(sigma_varifold, dtype=torch.float32, device=device), md_temp.lp.shape[1])
+
+    # Create losses for each of the target meshes
+    d_loss = lossVarifoldSurfWithLabels(md_temp.ft, md_subj.vt, md_subj.ft, md_temp.lpt, md_subj.lpt, K_vari) 
+            
+    # Create the root->template points/momentum, as well as the template->subject momenta
+    q_temp = md_temp.vt.clone().detach().requires_grad_(True).contiguous()
+    p_temp = torch.zeros_like(q_temp).requires_grad_(True).contiguous()
+
+    # Create the optimizer
+    start = time.time()
+    optimizer = torch.optim.LBFGS([p_temp], max_eval=16, max_iter=16, line_search_fn='strong_wolfe')
+
+    z0 = md_temp.vt[md_temp.ft]
+    area_0 = torch.norm(torch.cross(z0[:,1,:] - z0[:,0,:], z0[:,2,:] - z0[:,0,:]),dim=1) 
+
+    def closure(detail = False):
+        optimizer.zero_grad()
+        _, q_i = Shooting(p_temp, q_temp, K_temp, nt)[-1]
+        z = q_i[md_temp.ft]
+        area = torch.norm(torch.cross(z[:,1,:] - z[:,0,:], z[:,2,:] - z[:,0,:]),dim=1)
+        log_jac = torch.log10(area / area_0)
+
+        l_ham = gamma_lddmm * Hamiltonian(K_temp)(p_temp, q_temp)
+        l_data = d_loss(q_i)
+        l_jac = torch.sum(log_jac ** 2) * w_jac_penalty
+        L = l_ham + l_data + l_jac
+        L.backward()
+        if detail:
+            return l_ham, l_data, l_jac, L
+        else:
+            return L
+
+    # Perform optimization
+    for i in range(n_iter):
+        l_ham, l_data, l_jac, L = closure(True)
+        print(f'Iteration {i:03d}  Losses: H={l_ham:8.6f}  D={l_data:8.6f}  J={l_jac:8.6f}  Total={L:8.6f}')
         optimizer.step(closure)
 
+    print(f'Optimization (L-BFGS) time: {round(time.time() - start, 2)} seconds')
+
+    # Apply shooting so we can return the fitted mesh too
+    _, q_final = Shooting(p_temp, q_temp, K_temp, nt)[-1]
+
+    # Return the root model and the momenta
+    return p_temp, q_final
+
+
+# LDDMM registration between the template and the individual inflated mesh
+def subject_to_template_registration_keops(template:Template, workspace: Workspace, device):
+
+    # Load the template and put on the device
+    fn_template_mesh = template.get_mesh(workspace.side)
+    md_template = MeshData(load_vtk(fn_template_mesh), device)
+
+    # Downsample the meshes for affine registration
+    if md_template.v.shape[0] > 10000:
+        md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, 5000)
+    else:
+        md_template_ds = md_template
+
+    # Load the subject and put on the device
+    md_subject = MeshData(load_vtk(workspace.affine_moving), device)
+
+    # Downsample the meshes for affine registration
+    if md_subject.v.shape[0] > 10000:
+        md_subject_ds = MeshData(vtk_clone_pd(md_subject.pd), device, 5000)
+    else:
+        md_subject_ds = md_subject
+
+    # Perform similarity registration
+    _, affine_mat = similarity_registration_keops(
+        md_template_ds, md_subject_ds, n_iter=50, sigma_varifold=template.get_varifold_sigma())
+    
+    # Save the registration parameters
+    np.savetxt(workspace.affine_matrix, affine_mat)
+
+    # Apply the affine registration 
+    pd_moving = vtk_clone_pd(md_subject.pd)
+    x_moving = vtk_get_points(pd_moving) @ affine_mat[:3,:3].T + affine_mat[:3,3:].T
+    vtk_set_points(pd_moving, x_moving)
+    save_vtk(pd_moving, workspace.fit_target)
+
+    # Update the subject mesh to be the affinely registered one
+    md_subject = MeshData(pd_moving, device)
+
+    # Now perform the LDDMM deformation
+    nt = template.get_lddmm_nt()
+    p_temp, q_fit = lddmm_fit_subject_jac_penalty(
+        md_template, md_subject, n_iter=50, nt = nt,
+        sigma_lddmm=template.get_lddmm_sigma(),
+        sigma_varifold=template.get_varifold_sigma(),
+        gamma_lddmm=template.get_lddmm_gamma(),
+        w_jac_penalty=template.get_jacobian_penalty())
+
     # Save the fitting parameters
-    pd = vtk_clone_pd(template.pd)
-    vtk_set_point_array(pd, 'Momentum', p.cpu().detach().numpy())
+    pd = load_vtk(template.get_mesh(workspace.side))
+    vtk_set_point_array(pd, 'Momentum', p_temp.cpu().detach().numpy())
     vtk_set_field_data(pd, 'lddmm_sigma', template.get_lddmm_sigma())
     vtk_set_field_data(pd, 'lddmm_nt', nt)
     save_vtk(pd, workspace.fit_lddmm_momenta)
 
-    # Save the mesh under a new name
-    _, q_fit=Shooting(p, q, GaussKernel(sigma=sigma_lddmm), nt)[-1]
-    vtk_set_points(pd, q_fit.cpu().detach().numpy())
+    # We now need to combine the affine and deformable components to bring the mesh
+    # into the space of the subject
+    A_inv = np.linalg.inv(affine_mat[:3,:3])
+    b_inv = - A_inv @ affine_mat[:3,3:]
+    vtk_set_points(pd, q_fit.detach().cpu().numpy())
     save_vtk(pd, workspace.fit_lddmm_result)
 
 
@@ -608,62 +758,143 @@ def subject_to_template_fit_omt(template:Template, workspace: Workspace, device)
         json.dump(dist_stat, jsonfile)
 
 
+def omt_match_fitted_template_to_target(pd_fitted, pd_target, pd_target_native, device):
 
-# Create a parser
-parse = argparse.ArgumentParser(description="ASHS-T1 Surface-Based Analysis based on CRUISE")
+    # Load the fitted template mesh
+    md_fitted, md_target = MeshData(pd_fitted, device), MeshData(pd_target, device)
 
-# Add the arguments
-parse.add_argument('ashs_dir', metavar='ASHS output path', type=pathlib.Path, 
-                   help='Directory generated by running T1-ASHS')
-parse.add_argument('template_dir', metavar='CrASHS tempate path', type=pathlib.Path, 
-                   help='Path to the CrASHS template')
-parse.add_argument('output_dir', metavar='output_dir', type=str, 
-                   help='Output directory to save images')
-parse.add_argument('-i', '--id', metavar='id', type=str, 
-                   help='Experiment id, defaults to output directory basename')
-parse.add_argument('-s', '--side', type=str, choices=['left', 'right'], 
-                   help='Side of the brain', default='left')
-parse.add_argument('-f', '--fusion-stage', type=str, choices=['multiatlas', 'bootstrap'], 
-                   help='Which stage of ASHS fusion to select', default='bootstrap')                   
-parse.add_argument('-c', '--correction-mode', type=str, choices=['heur', 'corr_usegray', 'corr_nogray'], 
-                   help='Which ASHS correction output to select', default='corr_usegray')                   
-parse.add_argument('-d', '--device', type=str, 
-                   help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
-parse.add_argument('-r', '--reduction', type=float, 
-                   help='Reduction to apply to meshes for geodesic shooting', default=None)
-args = parse.parse_args()
+    # Match the template to subject via OMT, i.e. every template vertex is mapped to somewhere on the
+    # subject mesh, this fits more closely than LDDMM but might break topology
+    _, w_omt = match_omt(md_fitted.vt, md_fitted.ft, md_target.vt, md_target.ft)
+    v_omt, v_int, w_int = omt_match_to_vertex_weights(md_fitted.pd, md_target.pd, w_omt.detach().cpu().numpy())
 
-# Load the template
-template = Template(args.template_dir, args.side)
+    # Save the template OMT matched to the subject inflated mesh
+    pd_omt = vtk_make_pd(v_omt, md_fitted.f)
+    vtk_set_cell_array(pd_omt, 'plab', md_fitted.lp)
+    vtk_set_cell_array(pd_omt, 'match', w_omt.detach().cpu().numpy())
+    vtk_set_point_array(pd_omt, 'omt_v_int', v_int)
+    vtk_set_point_array(pd_omt, 'omt_w_int', w_int)
 
-# Load the ASHS experiment
-ashs = ASHSFolder(args.ashs_dir, args.side, args.fusion_stage, args.correction_mode)
-ashs.load_posteriors(template)
+    # Map the template to native mesh using the barycentric interpolation weights
+    v_omt_to_native = np.einsum('vij,vi->vj', vtk_get_points(pd_target_native)[v_int,:], w_int)
+    pd_omt_to_native = vtk_clone_pd(pd_omt)
+    vtk_set_points(pd_omt_to_native, v_omt_to_native)
 
-# Create the output workspace
-expid = args.id if args.id is not None else os.path.basename(args.output_dir)
-workspace = Workspace(args.output_dir, expid)
+    # Return the two meshes
+    return pd_omt, pd_omt_to_native
 
-# Determine the device to use in torch
-device = torch.device(args.device) if torch.cuda.is_available() else 'cpu'
 
-# Convert the inputs into probability maps
-print("Converting ASHS-T1 posteriors to CRUISE inputs")
-ashs_output_to_cruise_input(template, ashs.posteriors, workspace)
+def subject_to_template_fit_omt_keops(template:Template, workspace: Workspace, device):
 
-# Run CRUISE on the inputs
-print("Running CRUISE to correct topology and compute inflated surface")
-run_cruise(workspace, overwrite=True)
+    # Perform matching, get the omt matches to halfway inflated mesh space and halfway native mesh
+    pd_fitted = load_vtk(workspace.fit_lddmm_result)
+    pd_subj_infl = load_vtk(workspace.fit_target)
+    pd_subj_native = load_vtk(workspace.fn_cruise(f'mtl_avg_l2m-mesh-ras.vtk'))
+    pd_omt_to_infl, pd_omt_to_native = omt_match_fitted_template_to_target(pd_fitted, pd_subj_infl, pd_subj_native)
 
-# Perform postprocessing
-print("Mapping ASHS labels on the inflated template")
-cruise_postproc(template, ashs, workspace)
+    # Save the template OMT matched to the subject inflated mesh
+    save_vtk(pd_omt_to_infl, workspace.fit_omt_match)
+    save_vtk(pd_omt_to_native, workspace.fit_omt_match_to_hw)
 
-# Perform the registration
-print("Registering template to subject")
-subject_to_template_registration_fast_cpu(template, workspace, device, args.reduction)
+    # TODO: propagate the model to all boundary layers
 
-# Perform the OMT matching
-print("Matching template to subject using OMT")
-subject_to_template_fit_omt(template, workspace, device)
+    # Compute distance statistics
+    #dist_stat = {
+    #    'mean': np.mean(x_dist),
+    #    'rms': np.sqrt(np.mean(x_dist ** 2)),
+    #    'q95': np.quantile(x_dist, 0.95),
+    #    'max': np.max(x_dist)
+    #}
+
+    # Write distance statistics
+    #with open(workspace.fit_dist_stat, 'wt') as jsonfile:
+    #    json.dump(dist_stat, jsonfile)
+
+
+
+
+
+if __name__ == '__main__':
+
+    # Create a parser
+    parse = argparse.ArgumentParser(description="ASHS-T1 Surface-Based Analysis based on CRUISE")
+
+    # Add the arguments
+    parse.add_argument('ashs_dir', metavar='ASHS output path', type=pathlib.Path, 
+                    help='Directory generated by running T1-ASHS')
+    parse.add_argument('template_dir', metavar='CrASHS tempate path', type=pathlib.Path, 
+                    help='Path to the CrASHS template')
+    parse.add_argument('output_dir', metavar='output_dir', type=str, 
+                    help='Output directory to save images')
+    parse.add_argument('-i', '--id', metavar='id', type=str, 
+                    help='Experiment id, defaults to output directory basename')
+    parse.add_argument('-s', '--side', type=str, choices=['left', 'right'], 
+                    help='Side of the brain', default='left')
+    parse.add_argument('-f', '--fusion-stage', type=str, choices=['multiatlas', 'bootstrap'], 
+                    help='Which stage of ASHS fusion to select', default='bootstrap')                   
+    parse.add_argument('-c', '--correction-mode', type=str, choices=['heur', 'corr_usegray', 'corr_nogray'], 
+                    help='Which ASHS correction output to select', default='corr_usegray')                   
+    parse.add_argument('-d', '--device', type=str, 
+                    help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
+    parse.add_argument('-K', '--keops', action='store_true',
+                    help='Use KeOps routines for registration and OMT (GPU needed)')
+    parse.add_argument('-r', '--reduction', type=float, 
+                    help='Reduction to apply to meshes for geodesic shooting', default=None)
+    parse.add_argument('--skip-reg', action='store_true',
+                       help='Skip the registration step')
+    parse.add_argument('--skip-omt', action='store_true',
+                       help='Skip the optimal transport matching step')
+    parse.add_argument('--skip-cruise', action='store_true')
+
+    args = parse.parse_args()
+
+    # Load the template
+    template = Template(args.template_dir)
+
+    # Load the ASHS experiment
+    ashs = ASHSFolder(args.ashs_dir, args.side, args.fusion_stage, args.correction_mode)
+    ashs.load_posteriors(template)
+
+    # Create the output workspace
+    expid = args.id if args.id is not None else os.path.basename(args.output_dir)
+    workspace = Workspace(args.output_dir, expid, args.side)
+
+    # Determine the device to use in torch
+    device = torch.device(args.device) if torch.cuda.is_available() else 'cpu'
+    print("CUDA available    : ", torch.cuda.is_available())
+    print("CUDA device count : ", torch.cuda.device_count())
+    print("Selected device   : ", device)
+
+    # Perform the import and CRUISE steps
+    if args.skip_cruise is False:
+
+        # Convert the inputs into probability maps
+        print("Converting ASHS-T1 posteriors to CRUISE inputs")
+        ashs_output_to_cruise_input(template, ashs.posteriors, workspace)
+
+        # Run CRUISE on the inputs
+        print("Running CRUISE to correct topology and compute inflated surface")
+        run_cruise(workspace, template, overwrite=True)
+
+        # Perform postprocessing
+        print("Mapping ASHS labels on the inflated template")
+        cruise_postproc(template, ashs, workspace)
+
+    # Perform the registration
+    if args.skip_reg is False:
+
+        # Affine and LDDMM registration between template and subject
+        print("Registering template to subject")
+        if args.keops is True:
+            subject_to_template_registration_keops(template, workspace, device)
+        else:
+            subject_to_template_registration_fast_cpu(template, workspace, device, args.reduction)
+
+    if args.skip_omt is False:
+        # Perform the OMT matching
+        print("Matching template to subject using OMT")
+        if args.keops is True:
+            subject_to_template_fit_omt_keops(template, workspace, device)
+        else:
+            subject_to_template_fit_omt(template, workspace, device)
 
