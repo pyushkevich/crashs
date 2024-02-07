@@ -400,6 +400,49 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
     save_vtk(pd_temp_save, f'{tbs.lddmm_dir()}/template_final_with_momenta.vtk')
 
 
+def generate_template_output_folder(tbs: TemplateBuildWorkspace, template: Template, out_dir):
+
+    # Create the output directory
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Read the template with the momenta
+    pd_temp = load_vtk(f'{tbs.lddmm_dir()}/template_final_with_momenta.vtk')
+
+    # We only want to keep the plab array, not the momenta that have input ids
+    v,f,lp = vtk_get_points(pd_temp), vtk_get_triangles(pd_temp), vtk_get_cell_array(pd_temp, 'plab')
+    pd_left = vtk_make_pd(v, f)
+    vtk_set_cell_array(pd_left, 'plab', lp)
+
+    # Compute curvature measures on the template
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(pymeshlab.Mesh(vertex_matrix=v, face_matrix=f))
+
+    # Compute curvatures (not that important)
+    for c_id,c_nm in { 0: 'Mean', 1: 'Gaussian', 4: 'ShapeIndex', 5: 'Curvedness' }.items():
+        ms.compute_curvature_principal_directions_per_vertex(
+            method='Scale Dependent Quadric Fitting', 
+            curvcolormethod=c_id,
+            scale=pymeshlab.AbsoluteValue(3.0))
+        q = ms.mesh(0)
+        vtk_set_point_array(pd_left, f'Curvature_{c_nm}', ms.mesh(0).vertex_scalar_array())
+
+    # Set the label array in the template by taking argmax over plab
+    vtk_set_cell_array(pd_left, 'label', np.argmax(lp, axis=1))
+
+    # Save the left template
+    save_vtk(pd_left, f'{out_dir}/template_shoot_left.vtk')
+
+    # Apply a flip to the left template
+    flip_lr = np.loadtxt(os.path.join(template.root, 'ashs_template_flip.mat'))
+    pd_right = vtk_clone_pd(pd_left)
+    vtk_set_points(pd_right, np.einsum('ij,kj->ki', flip_lr[:3,:3].T, v) + flip_lr[:3,3])
+    save_vtk(pd_right, f'{out_dir}/template_shoot_right.vtk')
+
+    # Save the JSON
+    with open(f'{out_dir}/template.json','wt') as fd:
+        json.dump(template.json, fd)
+
+
 def finalize_groupwise_keops(tbs: TemplateBuildWorkspace, template: Template, device):
 
     # Read the template with the momenta
@@ -434,7 +477,7 @@ def finalize_groupwise_keops(tbs: TemplateBuildWorkspace, template: Template, de
         vtk_set_cell_array(pd_fitted, 'plab', md_temp.lp)
 
         # Perform OMT matching to the target shape and then to native space
-        pd_subj_native = load_vtk(tbs.get_subject_workspace(id).fn_cruise(f'mtl_avg_l2m-mesh-ras.vtk'))
+        pd_subj_native = load_vtk(tbs.get_subject_workspace(id).fn_cruise(f'mtl_avg_l2m-mesh.vtk'))
         pd_omt_to_infl, pd_omt_to_native = omt_match_fitted_template_to_target(pd_fitted, md_i.pd, pd_subj_native, device)
         
         # Save the fitted, omt, and omt-to-native meshes
@@ -442,7 +485,21 @@ def finalize_groupwise_keops(tbs: TemplateBuildWorkspace, template: Template, de
         save_vtk(pd_omt_to_infl, tbs.fn_final_omt_mesh(id))
         save_vtk(pd_omt_to_native, tbs.fn_final_omt_to_native_hw_mesh(id))
 
+        # Propagate this fitted mesh through the levelset layers using OMT
+        print(f'Propagating through level set {id}')
+        img_ls = sitk.ReadImage(ws_i.fn_cruise('mtl_layering-boundaries.nii.gz'))
+        prof_meshes, mid_layer = profile_meshing_omt(img_ls, source_mesh=pd_omt_to_native, device=device)
 
+        # Save these profile meshes
+        for layer, pd_layer in enumerate(prof_meshes):
+            save_vtk(pd_layer, f'{tbs.final_dir()}/temp_omt_{id}_p{layer:02d}.vtk', binary=True)
+        return
+
+
+
+
+"""
+OLD CODE
 def groupwise_lddmm(tbs: TemplateBuildWorkspace, template: Template, device, stages=5, eta=0.5):
 
     # Read the affine meshes
@@ -552,7 +609,7 @@ def groupwise_lddmm(tbs: TemplateBuildWorkspace, template: Template, device, sta
         plt.xlabel('Iteration')
         plt.ylabel('Loss value')
         plt.savefig(os.path.join(tbs.qa_dir(), 'loss_by_stage.png'))
-
+"""
 
 if __name__ == '__main__':
 
@@ -626,5 +683,6 @@ if __name__ == '__main__':
         groupwise_similarity_registration_keops(tbs, template, device=device)
 
     # Run the groupwise code
-    template_from_ellipsoid_keops(tbs, template, device)
+    # template_from_ellipsoid_keops(tbs, template, device)
+    generate_template_output_folder(tbs, template, args.output_dir  )
     finalize_groupwise_keops(tbs, template, device=device)

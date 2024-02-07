@@ -11,6 +11,7 @@ import pathlib
 import geomloss
 import subprocess
 import time
+import SimpleITK as sitk
 from vtkutil import *
 from lddmm import *
 from omt import *
@@ -273,14 +274,14 @@ def run_cruise(workspace:Workspace, template:Template, overwrite=False):
 
   # Extract average surface, grey-white surface and grey-csf surface as meshes
   cortical_surface = {}
+  
   for lset in ('avg', 'cgb', 'gwb'):
-    # Extract the level set
     cortical_surface[lset] = nighres.surface.levelset_to_mesh(
         levelset_image=cruise[lset],
         save_data=True,
         overwrite=overwrite,
         file_name=f'{fn_base}_{lset}.vtk',
-        output_dir=out_dir)    
+        output_dir=out_dir)
 
   inflated_surface = nighres.surface.surface_inflation(
                           surface_mesh=cortical_surface['avg']['result'],

@@ -2,6 +2,7 @@ import vtk
 from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
 import pymeshlab
 import numpy as np
+import SimpleITK as sitk
 
 # Read VTK mesh
 def load_vtk(filename):
@@ -245,3 +246,38 @@ def vtk_get_interpolation_arrays_for_sample(pd_src, x_samples):
     return v_res, w_res
 
 
+def extract_zero_levelset(img_levelset, edge_len_pct=1.0, to_ras=True):
+    pix_raw = sitk.GetArrayFromImage(img_levelset)
+    img = vtk.vtkImageData()
+    img.GetPointData().SetScalars(numpy_to_vtk(pix_raw.flatten(), array_type=vtk.VTK_FLOAT))
+    img.SetDimensions(img_levelset.GetSize()[0], img_levelset.GetSize()[1], img_levelset.GetSize()[2]) 
+
+    cube = vtk.vtkMarchingCubes()
+    cube.SetInputData(img)
+    cube.SetNumberOfContours(1)
+    cube.SetValue(0, 0.0)
+
+    tri1 = vtk.vtkTriangleFilter()
+    tri1.SetInputConnection(cube.GetOutputPort())
+    tri1.PassLinesOff()
+    tri1.PassVertsOff()
+
+    clean = vtk.vtkCleanPolyData()
+    clean.SetInputConnection(tri1.GetOutputPort())
+    clean.PointMergingOn()
+    clean.SetTolerance(0.0)
+
+    tri2 = vtk.vtkTriangleFilter()
+    tri2.SetInputConnection(clean.GetOutputPort())
+    tri2.PassLinesOff()
+    tri2.PassVertsOff()
+
+    tri2.Update()
+    pd_cubes = tri2.GetOutput()
+
+    # Apply remeshing to the template
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(pymeshlab.Mesh(vertex_matrix=vtk_get_points(pd_cubes), face_matrix=vtk_get_triangles(pd_cubes)))
+    ms.meshing_isotropic_explicit_remeshing(targetlen = pymeshlab.Percentage(edge_len_pct))
+    v_remesh, f_remesh = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+    return vtk_make_pd(v_remesh, f_remesh)
