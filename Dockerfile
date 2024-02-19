@@ -3,10 +3,12 @@ FROM pyushkevich/tk:2023b
 
 # Install nighres prerequisites
 RUN echo "deb http://archive.ubuntu.com/ubuntu/ bionic main universe" >> /etc/apt/sources.list
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
+RUN apt-get update
 RUN apt-get install -y openjdk-11-jdk python3-jcc
 
 # Install nighres
-RUN git clone https://github.com/nighres/nighres /tk/nighres && cd /tk/nighres && git checkout 6b3b3eb
+RUN git clone https://github.com/nighres/nighres /tk/nighres && cd /tk/nighres && git checkout 7293c368476a015708b3a89c43409fdfdef9e19c
 RUN ln -s /usr/lib/jvm/java-11-openjdk-amd64 /usr/lib/jvm/default-java
 RUN apt-get install -y wget
 WORKDIR /tk/nighres
