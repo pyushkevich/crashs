@@ -77,6 +77,7 @@ def RalstonIntegrator():
 
     return f
 
+
 # LDDMM definitions
 
 def Hamiltonian(K):

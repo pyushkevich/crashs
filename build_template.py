@@ -59,6 +59,9 @@ class TemplateBuildWorkspace:
     def fn_affine_mesh(self, id:str):
         return os.path.join(self.affine_dir(), f'affine_aligned_{id}.vtk')
 
+    def fn_affine_mesh_reduced(self, id:str):
+        return os.path.join(self.affine_dir(), f'affine_aligned_reduced_{id}.vtk')
+
     def fn_affine_matrix(self, id:str):
         return os.path.join(self.affine_dir(), f'affine_{id}.mat')
 
@@ -101,8 +104,8 @@ def groupwise_similarity_registration_keops(tbs: TemplateBuildWorkspace, templat
 
         # Load the mesh data
         pd = load_vtk(sd['workspace'].affine_moving)
-        md_full[id] = MeshData(pd, device, transform=transform)
-        md_ds[id] = MeshData(pd, device, transform=transform, target_faces=5000)
+        md_full[id] = MeshData(load_vtk(sd['workspace'].affine_moving), device, transform=transform)
+        md_ds[id] = MeshData(load_vtk(sd['workspace'].affine_moving_reduced), device, transform=transform)
 
         # Save the input to the groupwise affine
         pd_flipped = vtk_make_pd(md_ds[id].v, md_ds[id].f)
@@ -177,11 +180,24 @@ def groupwise_similarity_registration_keops(tbs: TemplateBuildWorkspace, templat
             pd_reg = vtk_set_cell_array(pd_reg, 'plab', md_k.lp)
             print(f'Saving {tbs.fn_affine_mesh(k)}')
             save_vtk(pd_reg, tbs.fn_affine_mesh(k))
+
+            # Also saved the registered reduced mesh
+            v_reg_ds = (R @ md_ds[k].vt.t()).t() + b
+            pd_reg_ds = vtk_make_pd(v_reg_ds.detach().cpu().numpy(), md_ds[k].f)
+            pd_reg_ds = vtk_set_cell_array(pd_reg_ds, 'plab', md_ds[k].lp)
+            print(f'Saving {tbs.fn_affine_mesh_reduced(k)}')
+            save_vtk(pd_reg_ds, tbs.fn_affine_mesh_reduced(k))
+
         else:
             pd_reg = vtk_make_pd(md_k.vt.detach().cpu().numpy(), md_k.f)
             pd_reg = vtk_set_cell_array(pd_reg, 'plab', md_k.lp)
             print(f'Saving {tbs.fn_affine_mesh(k)}')
             save_vtk(pd_reg, tbs.fn_affine_mesh(k))
+
+            pd_reg_ds = vtk_make_pd(md_ds[k].vt.detach().cpu().numpy(), md_ds[k].f)
+            pd_reg_ds = vtk_set_cell_array(pd_reg_ds, 'plab', md_ds[k].lp)
+            print(f'Saving {tbs.fn_affine_mesh_reduced(k)}')
+            save_vtk(pd_reg_ds, tbs.fn_affine_mesh_reduced(k))
 
         # Now save the affine matrix
         np.savetxt(tbs.fn_affine_matrix(k), affine_mat)
@@ -279,6 +295,9 @@ def map_template_to_subject(md_temp, md_target, p_temp, sigma_lddmm=5):
 
 def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Template, device):
 
+    # Read the downsampled affine-aligned meshes
+    md_aff_ds = { id: MeshData(load_vtk(tbs.fn_affine_mesh_reduced(id)), device) for id,_ in tbs.get_subjects() }
+
     # Read the affine-aligned meshes
     md_aff = { id: MeshData(load_vtk(tbs.fn_affine_mesh(id)), device) for id,_ in tbs.get_subjects() }
 
@@ -297,13 +316,13 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
 
     # Find an affine transformation of the sphere that best aligns with the data 
     # using the varifold measure
-    v_all = np.concatenate([ x.v for id,x in md_aff.items() ], 0)
+    v_all = np.concatenate([ x.v for id,x in md_aff_ds.items() ], 0)
     pca = PCA(n_components=3)
     pca.fit(v_all)
 
     # Create losses for each of the target meshes
     kernel = GaussLinKernel(torch.tensor([template.get_varifold_sigma()], dtype=torch.float32, device=device))
-    loss = { id: lossVarifoldSurf(md_sph.ft, md.vt, md.ft, kernel) for (id,md) in md_aff.items() }
+    loss = { id: lossVarifoldSurf(md_sph.ft, md.vt, md.ft, kernel) for (id,md) in md_aff_ds.items() }
 
     # Create a parameter tensor for the sphere
     b = torch.tensor(pca.mean_, dtype=torch.float32, device=device, requires_grad=True).contiguous()
@@ -318,9 +337,9 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
         x = md_sph.vt
         y = (A @ x.T).T + b
         L = 0
-        for i, (id,v) in enumerate(md_aff.items()):
+        for i, (id,v) in enumerate(md_aff_ds.items()):
             L = L + loss[id](y)
-        L = L / len(md_aff.items())
+        L = L / len(md_aff_ds.items())
         L.backward()
         return L
 
@@ -343,7 +362,7 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
     pd_ell = vtk_set_cell_array(pd_ell, 'plab', np.zeros((f_ell.shape[0],1)))
     md_ell = MeshData(pd_ell, device)
 
-    # Sample the label probabilities from the target shapes using OMT
+    # Sample the label probabilities from the target shapes (full resolution) using OMT
     plab_sample = []
     for _, md_i in md_aff.items():
         _, w_omt = match_omt(md_ell.vt, md_ell.ft, md_i.vt, md_i.ft)
@@ -373,9 +392,9 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
         # Print iteration
         print(f'*** TEMPLATE BUILD STAGE {i} ***')
 
-        # Fit the model to the population        
+        # Fit the model to the population (use downsampled target meshes)  
         p_root, p_temp = fit_model_to_population(
-            md_root, md_aff, iter, nt,
+            md_root, md_aff_ds, iter, nt,
             sigma_lddmm=sigma_lddmm, sigma_root=sigma_root, 
             sigma_varifold=sigma_varifold, gamma_lddmm=gamma_lddmm,
             w_jacobian_penalty=w_jacobian_penalty) 
@@ -384,7 +403,7 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
         md_temp = shoot_root_to_template(md_root, p_root, sigma_root=sigma_root)
         save_vtk(md_temp.pd, f'{tbs.lddmm_dir()}/template_iter{i:02d}.vtk')
 
-        # Remesh the template
+        # Remesh the template (use fill-resolution target meshes to sample plab)
         md_remesh = update_model_by_remeshing(
             md_root, md_aff, p_root, p_temp, 
             sigma_lddmm=sigma_lddmm, sigma_root=sigma_root, targetlen=targetlen)
@@ -477,23 +496,28 @@ def finalize_groupwise_keops(tbs: TemplateBuildWorkspace, template: Template, de
         vtk_set_cell_array(pd_fitted, 'plab', md_temp.lp)
 
         # Perform OMT matching to the target shape and then to native space
-        pd_subj_native = load_vtk(tbs.get_subject_workspace(id).fn_cruise(f'mtl_avg_l2m-mesh.vtk'))
+        pd_subj_native = load_vtk(ws_i.fn_cruise(f'mtl_avg_l2m-mesh.vtk'))
         pd_omt_to_infl, pd_omt_to_native = omt_match_fitted_template_to_target(pd_fitted, md_i.pd, pd_subj_native, device)
         
         # Save the fitted, omt, and omt-to-native meshes
         save_vtk(pd_fitted, tbs.fn_final_fitted_mesh(id))
         save_vtk(pd_omt_to_infl, tbs.fn_final_omt_mesh(id))
-        save_vtk(pd_omt_to_native, tbs.fn_final_omt_to_native_hw_mesh(id))
 
         # Propagate this fitted mesh through the levelset layers using OMT
         print(f'Propagating through level set {id}')
         img_ls = sitk.ReadImage(ws_i.fn_cruise('mtl_layering-boundaries.nii.gz'))
         prof_meshes, mid_layer = profile_meshing_omt(img_ls, source_mesh=pd_omt_to_native, device=device)
 
-        # Save these profile meshes
+        # Get the sform for this subject
+        sform = np.loadtxt(ws_i.cruise_sform)
+ 
+        # Save these profile meshes, but mapping to RAS coordinate space for compatibility
+        # with image sampling tools
+        vtk_apply_sform(pd_omt_to_native, sform)
+        save_vtk(pd_omt_to_native, tbs.fn_final_omt_to_native_hw_mesh(id))
         for layer, pd_layer in enumerate(prof_meshes):
-            save_vtk(pd_layer, f'{tbs.final_dir()}/temp_omt_{id}_p{layer:02d}.vtk', binary=True)
-        return
+            vtk_apply_sform(pd_layer, sform, cell_coord_arrays=['wmatch'])
+            save_vtk(pd_layer, ws_i.fn_fit_profile_mesh(layer), binary=True)
 
 
 
@@ -673,7 +697,8 @@ if __name__ == '__main__':
 
             # Perform postprocessing
             print("Mapping ASHS labels on the inflated template")
-            cruise_postproc(template, ashs, workspace)
+            cruise_postproc(template, ashs, workspace, 
+                            reduction=template.get_cruise_inflate_reduction())
 
         # Store the data
         tbs.add_subject(id, workspace, side)
@@ -683,6 +708,6 @@ if __name__ == '__main__':
         groupwise_similarity_registration_keops(tbs, template, device=device)
 
     # Run the groupwise code
-    # template_from_ellipsoid_keops(tbs, template, device)
+    template_from_ellipsoid_keops(tbs, template, device)
     generate_template_output_folder(tbs, template, args.output_dir  )
     finalize_groupwise_keops(tbs, template, device=device)

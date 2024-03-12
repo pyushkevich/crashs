@@ -11,6 +11,7 @@ import pathlib
 import geomloss
 import subprocess
 import time
+import glob
 import SimpleITK as sitk
 from vtkutil import *
 from lddmm import *
@@ -39,6 +40,17 @@ class MeshData:
         self.vt = torch.tensor(self.v, dtype=torch.float32, device=device).contiguous()
         self.ft = torch.tensor(self.f, dtype=torch.long, device=device).contiguous()
         self.lpt = torch.tensor(self.lp, dtype=torch.float32, device=device).contiguous()
+
+    def apply_transform(self, transform):
+        vtk_apply_sform(self.pd, transform)
+        self.v = vtk_get_points(self.pd)
+        self.vt = torch.tensor(self.v, dtype=torch.float32, device=device).contiguous()
+
+    def export(self, fn):
+        pd_reduced = vtk_make_pd(self.v, self.f)
+        vtk_set_cell_array(pd_reduced, 'plab', self.lp)
+        vtk_set_cell_array(pd_reduced, 'label', np.argmax(self.lp, axis=1))
+        save_vtk(pd_reduced, fn)
 
 
 # Class that represents information about a template
@@ -84,8 +96,11 @@ class Template :
     def get_cruise_laminar_method(self):
         return self.json.get('cruise', dict()).get('laminar_method', 'distance-preserving')
     
+    def get_cruise_inflate_reduction(self):
+        return self.json.get('cruise', dict()).get('inflate_reduction', None)
+
     def get_remeshing_edge_len_pct(self):
-        return self.json.get('cruise', dict()).get('remeshing_edge_length_pct', 0.75)
+        return self.json.get('template_build', dict()).get('remeshing_edge_length_pct', 1.0)
     
     def get_build_iteration_schedule(self):
         return self.json.get('template_build', dict()).get('schedule', [10,10,10,50])
@@ -155,6 +170,7 @@ class Workspace:
         self.cruise_infl_mesh = self.fn_cruise('mtl_avg_infl-mesh.vtk')
         self.cruise_infl_mesh_labeled = self.fn_cruise('mtl_avg_infl-mesh-ras-labeled.vtk')
         self.cruise_middepth_mesh = self.fn_cruise('mtl_avg_l2m-mesh.vtk')
+        self.cruise_sform = self.fn_cruise('sform.mat')
 
         self.affine_moving = self.fn_fit('affine_moving.vtk')
         self.affine_moving_reduced = self.fn_fit('affine_moving_reduced.vtk')
@@ -171,6 +187,11 @@ class Workspace:
         self.fit_omt_match_to_hw = self.fn_fit('fitted_omt_match_to_hw.vtk')
         self.fit_dist_stat = self.fn_fit('fitted_dist_stat.json')
 
+    def fn_fit_profile_mesh(self, k:int):
+        return self.fn_fit(f'fitted_omt_match_to_p{k:02d}.vtk')
+
+    def fn_fit_profile_meshes(self):
+        return glob.glob(self.fn_fit(f'fitted_omt_match_to_p??.vtk'))
 
 
 # Load the available label posteriors into a dictionary
@@ -241,77 +262,82 @@ def ashs_output_to_cruise_input(template:Template, ashs_posteriors: dict, worksp
 
 # Routine to run CRUISE on an example
 def run_cruise(workspace:Workspace, template:Template, overwrite=False):
-  
-  # These are the inputs to CRUISE
-  cortex={
-    'inside_mask': workspace.cruise_wm_mask,
-    'inside_proba': workspace.cruise_wm_prob,
-    'region_proba': workspace.cruise_gm_prob,
-    'background_proba': workspace.cruise_bg_prob
-  }
 
-  # Append to fn_base for the CRUISE outputs (format consistent with earlier code)
-  out_dir, fn_base = workspace.cruise_dir, workspace.cruise_fn_base
+    # These are the inputs to CRUISE
+    cortex={
+        'inside_mask': workspace.cruise_wm_mask,
+        'inside_proba': workspace.cruise_wm_prob,
+        'region_proba': workspace.cruise_gm_prob,
+        'background_proba': workspace.cruise_bg_prob
+        }
 
-  # Get the directory and filename base for the CRUISE commands
-  corr=nighres.shape.topology_correction(
-    image=cortex['inside_mask'],
-    shape_type='binary_object',
-    propagation='background->object',
-    save_data=True,
-    output_dir=out_dir,
-    file_name=fn_base)
-	
-  cruise = nighres.cortex.cruise_cortex_extraction(
-      init_image=corr['object'],
-      wm_image=cortex['inside_proba'],
-      gm_image=cortex['region_proba'],
-      csf_image=cortex['background_proba'],
-      normalize_probabilities=True,
-      save_data=True,
-      file_name=fn_base,
-      output_dir=out_dir)
+    # Append to fn_base for the CRUISE outputs (format consistent with earlier code)
+    out_dir, fn_base = workspace.cruise_dir, workspace.cruise_fn_base
 
-  # Extract average surface, grey-white surface and grey-csf surface as meshes
-  cortical_surface = {}
-  
-  for lset in ('avg', 'cgb', 'gwb'):
-    cortical_surface[lset] = nighres.surface.levelset_to_mesh(
-        levelset_image=cruise[lset],
+    # Correct the topology of the white matter segmentation
+    corr = nighres.shape.topology_correction(
+        image=cortex['inside_mask'],
+        shape_type='binary_object',
+        propagation='background->object',
         save_data=True,
-        overwrite=overwrite,
-        file_name=f'{fn_base}_{lset}.vtk',
+        output_dir=out_dir,
+        file_name=fn_base)
+
+    # Use topology-preserving levelset to flow white matter to gray matter
+    cruise = nighres.cortex.cruise_cortex_extraction(
+        init_image=corr['object'],
+        wm_image=cortex['inside_proba'],
+        gm_image=cortex['region_proba'],
+        csf_image=cortex['background_proba'],
+        normalize_probabilities=True,
+        save_data=True,
+        file_name=fn_base,
         output_dir=out_dir)
 
-  inflated_surface = nighres.surface.surface_inflation(
-                          surface_mesh=cortical_surface['avg']['result'],
-                          save_data=True,
-                          file_name=f'{fn_base}_avg.vtk',
-                          output_dir=out_dir, 
-                          overwrite=overwrite,
-                          step_size=0.1,
-                          max_iter=template.get_cruise_inflate_maxiter(), 
-                          method='area',
-                          regularization=1.0)
+    # Extract average surface, grey-white surface and grey-csf surface as meshes
+    cortical_surface = {}
+    for lset in ('avg', 'cgb', 'gwb'):
+        cortical_surface[lset] = nighres.surface.levelset_to_mesh(
+            levelset_image=cruise[lset],
+            save_data=True,
+            overwrite=overwrite,
+            file_name=f'{fn_base}_{lset}.vtk',
+            output_dir=out_dir)
 
-  depth = nighres.laminar.volumetric_layering(
-                          inner_levelset=cruise['gwb'],
-                          outer_levelset=cruise['cgb'],
-                          n_layers=template.get_cruise_laminar_n_layers(),
-                          method=template.get_cruise_laminar_method(),
-                          save_data=True,
-                          overwrite=overwrite,
-                          file_name=fn_base,
-                          output_dir=out_dir)
+    # Inflate the average surface 
+    inflated_surface = nighres.surface.surface_inflation(
+        surface_mesh=cortical_surface['avg']['result'],
+        save_data=True,
+        file_name=f'{fn_base}_avg.vtk',
+        output_dir=out_dir, 
+        overwrite=overwrite,
+        step_size=0.1,
+        max_iter=template.get_cruise_inflate_maxiter(), 
+        method='area',
+        regularization=1.0)
 
-  # Generate corresponding surfaces at different layers
-  profile_meshing = nighres.laminar.profile_meshing(
-                          profile_surface_image=depth['boundaries'],
-                          starting_surface_mesh=cortical_surface['avg']['result'],
-                          save_data=True,
-                          overwrite=overwrite,
-                          file_name=f'{fn_base}.vtk',
-                          output_dir=out_dir)
+    # Compute cortical layering - this will be used later to extract meshes at different profiles
+    depth = nighres.laminar.volumetric_layering(
+                            inner_levelset=cruise['gwb'],
+                            outer_levelset=cruise['cgb'],
+                            n_layers=template.get_cruise_laminar_n_layers(),
+                            method=template.get_cruise_laminar_method(),
+                            save_data=True,
+                            overwrite=overwrite,
+                            file_name=fn_base,
+                            output_dir=out_dir)
+
+    # Generate corresponding surfaces at different layers
+    """
+    # No longer used - profile meshing happens using OMT after the template is fit
+    profile_meshing = nighres.laminar.profile_meshing(
+                            profile_surface_image=depth['boundaries'],
+                            starting_surface_mesh=cortical_surface['avg']['result'],
+                            save_data=True,
+                            overwrite=overwrite,
+                            file_name=f'{fn_base}.vtk',
+                            output_dir=out_dir)
+    """
 
 
 # Helper function, get sform from ITK
@@ -326,33 +352,18 @@ def get_image_sform(img):
     return sform
 
 
-# Compute label probability maps on the mesh for relevant labels
-def mesh_label_prob_maps(pd):
-    posteriors = { 0: 20, 1: 1, 2: 2, 3: 10, 4: 11, 5: 12, 6: 13 }
-    
-    # Load all the maps into a single array
-    d = np.zeros((pd.GetNumberOfCells(), 21))
-    for l in range(21):
-        a = vtk_get_cell_array(pd, f'label_{l:03d}')
-        if a is not None:
-            d[:,l] = a
-            
-    # Combine the labels we care about
-    q = np.zeros((pd.GetNumberOfCells(), 7))
-    for i,m in posteriors.items():
-        q[:,i] = d[:,m]
-    
-    # Compute softmax
-    return scipy.special.softmax(q * 10., axis=1)
-
-
 # CRUISE postprocessing command - takes meshes to RAS coordinate space
 # and projects label probabilities onto the mesh
-def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
+def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace, reduction: None):
 
     # Get the matrix from voxel coordinates to RAS coordinates
     _, img_ref = next(iter(ashs.posteriors.items()))
     sform = get_image_sform(img_ref)
+
+    # Save this matrix for future use
+    np.savetxt(workspace.cruise_sform, sform)
+
+    # Get the sampling grid from the image
     vox = sitk.GetArrayFromImage(img_ref)
     grid_spec = list(np.arange(vox.shape[k]) for k in range(3))
 
@@ -391,9 +402,7 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
     # This is only for visualization purposes
     for lset in ('cgb', 'gwb', 'avg'):
         pd_lset = load_vtk(workspace.fn_cruise(f'mtl_{lset}_l2m-mesh.vtk'))
-        x_lset = vtk_get_points(pd_lset)
-        x_lset = x_lset @ sform[:3,:3].T + sform[:3,3:].T
-        vtk_set_points(pd_lset, x_lset)
+        vtk_apply_sform(pd_lset, sform)
         save_vtk(pd_lset, workspace.fn_cruise(f'mtl_{lset}_l2m-mesh-ras.vtk'))
 
     # Apply the affine transform from ASHS, taking the mesh to template space
@@ -401,6 +410,12 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace):
     x_infl = x_infl @ M[:3,:3].T + M[:3,3:].T 
     vtk_set_points(pd_infl, x_infl)
     save_vtk(pd_infl, workspace.affine_moving)
+
+    # Downsample the inflated mesh. Since the inflated mesh is smooth, it should be
+    # perfectly safe to downsample it by a large amount (say 10x), and still use it
+    # as a target for varifold matching. 
+    md_aff_reduced = MeshData(pd_infl, 'cpu', target_faces=reduction)
+    md_aff_reduced.export(workspace.affine_moving_reduced)
 
     # Return the pd
     return pd_infl
@@ -412,21 +427,11 @@ def subject_to_template_registration_fast_cpu(template:Template, workspace: Work
 
     # Load the template and put on the device
     fn_template_mesh = template.get_mesh(workspace.side)
-    md_template = MeshData(load_vtk(fn_template_mesh), device, reduction)
+    md_template = MeshData(load_vtk(fn_template_mesh), device, target_faces=reduction)
+    md_template.export(workspace.fit_template_reduced)
 
     # Load the subject and put on the device
-    md_subject = MeshData(load_vtk(workspace.affine_moving), device, reduction)
-
-    # Export the two reduced meshes
-    def export_reduced(md, fn):
-        pd_reduced = vtk_make_pd(md.v, md.f)
-        pd_reduced = vtk_set_point_array(pd_reduced, 'plab', md.lp)
-        pd_reduced = vtk_all_point_arrays_to_cell_arrays(pd_reduced)
-        vtk_set_point_array(pd_reduced, 'label', np.argmax(md.lp, axis=1))
-        save_vtk(pd_reduced, fn)
-
-    export_reduced(md_template, workspace.fit_template_reduced) 
-    export_reduced(md_subject, workspace.affine_moving_reduced) 
+    md_subject = MeshData(load_vtk(workspace.affine_moving_reduced), device)
 
     # Call ml_affine for affine registration
     cmd = (f'ml_affine -m label {workspace.affine_moving_reduced} '
@@ -594,7 +599,7 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     fn_template_mesh = template.get_mesh(workspace.side)
     md_template = MeshData(load_vtk(fn_template_mesh), device)
 
-    # Downsample the meshes for affine registration
+    # Downsample the meshes for affine registration (do we really need to?)
     if md_template.v.shape[0] > 10000:
         md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, 5000)
     else:
@@ -603,11 +608,8 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     # Load the subject and put on the device
     md_subject = MeshData(load_vtk(workspace.affine_moving), device)
 
-    # Downsample the meshes for affine registration
-    if md_subject.v.shape[0] > 10000:
-        md_subject_ds = MeshData(vtk_clone_pd(md_subject.pd), device, 5000)
-    else:
-        md_subject_ds = md_subject
+    # Also load the reduced mesh
+    md_subject_ds = MeshData(load_vtk(workspace.affine_moving_reduced), device)
 
     # Perform similarity registration
     _, affine_mat = similarity_registration_keops(
@@ -616,19 +618,17 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     # Save the registration parameters
     np.savetxt(workspace.affine_matrix, affine_mat)
 
-    # Apply the affine registration 
-    pd_moving = vtk_clone_pd(md_subject.pd)
-    x_moving = vtk_get_points(pd_moving) @ affine_mat[:3,:3].T + affine_mat[:3,3:].T
-    vtk_set_points(pd_moving, x_moving)
-    save_vtk(pd_moving, workspace.fit_target)
+    # Apply the affine registration parameters to the two meshes
+    md_subject.apply_transform(affine_mat)
+    md_subject.export(workspace.fit_target)
 
-    # Update the subject mesh to be the affinely registered one
-    md_subject = MeshData(pd_moving, device)
+    md_subject_ds.apply_transform(affine_mat)
+    md_subject_ds.export(workspace.fit_target_reduced)
 
     # Now perform the LDDMM deformation
     nt = template.get_lddmm_nt()
     p_temp, q_fit = lddmm_fit_subject_jac_penalty(
-        md_template, md_subject, n_iter=50, nt = nt,
+        md_template, md_subject_ds, n_iter=50, nt = nt,
         sigma_lddmm=template.get_lddmm_sigma(),
         sigma_varifold=template.get_varifold_sigma(),
         gamma_lddmm=template.get_lddmm_gamma(),
@@ -639,6 +639,7 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     vtk_set_point_array(pd, 'Momentum', p_temp.cpu().detach().numpy())
     vtk_set_field_data(pd, 'lddmm_sigma', template.get_lddmm_sigma())
     vtk_set_field_data(pd, 'lddmm_nt', nt)
+    vtk_set_field_data(pd, 'lddmm_ralston', 1.)
     save_vtk(pd, workspace.fit_lddmm_momenta)
 
     # We now need to combine the affine and deformable components to bring the mesh
@@ -790,29 +791,43 @@ def subject_to_template_fit_omt_keops(template:Template, workspace: Workspace, d
     # Perform matching, get the omt matches to halfway inflated mesh space and halfway native mesh
     pd_fitted = load_vtk(workspace.fit_lddmm_result)
     pd_subj_infl = load_vtk(workspace.fit_target)
-    pd_subj_native = load_vtk(workspace.fn_cruise(f'mtl_avg_l2m-mesh-ras.vtk'))
-    pd_omt_to_infl, pd_omt_to_native = omt_match_fitted_template_to_target(pd_fitted, pd_subj_infl, pd_subj_native)
+    pd_subj_native = load_vtk(workspace.fn_cruise(f'mtl_avg_l2m-mesh.vtk'))
+    pd_omt_to_infl, pd_omt_to_native = omt_match_fitted_template_to_target(pd_fitted, pd_subj_infl, pd_subj_native, device)
 
     # Save the template OMT matched to the subject inflated mesh
     save_vtk(pd_omt_to_infl, workspace.fit_omt_match)
-    save_vtk(pd_omt_to_native, workspace.fit_omt_match_to_hw)
 
-    # TODO: propagate the model to all boundary layers
+    # Propagate this fitted mesh through the levelset layers using OMT
+    print(f'Propagating through level set {id}')
+    img_ls = sitk.ReadImage(workspace.fn_cruise('mtl_layering-boundaries.nii.gz'))
+    prof_meshes, mid_layer = profile_meshing_omt(img_ls, source_mesh=pd_omt_to_native, device=device)
+
+    # Get the sform for this subject
+    sform = np.loadtxt(workspace.cruise_sform)
+
+    # Save these profile meshes, but mapping to RAS coordinate space for compatibility
+    # with image sampling tools
+    vtk_apply_sform(pd_omt_to_native, sform)
+    save_vtk(pd_omt_to_native, workspace.fit_omt_match_to_hw)
+    for layer, pd_layer in enumerate(prof_meshes):
+        vtk_apply_sform(pd_layer, sform, cell_coord_arrays=['wmatch'])
+        save_vtk(pd_layer, workspace.fn_fit_profile_mesh(layer), binary=True)
+
+    # Compute the distance statistics to establish quality of fit
+    x_dist_ab = vtk_pointset_to_mesh_distance(pd_fitted, pd_subj_infl)
+    x_dist_ba = vtk_pointset_to_mesh_distance(pd_subj_infl, pd_fitted)
 
     # Compute distance statistics
-    #dist_stat = {
-    #    'mean': np.mean(x_dist),
-    #    'rms': np.sqrt(np.mean(x_dist ** 2)),
-    #    'q95': np.quantile(x_dist, 0.95),
-    #    'max': np.max(x_dist)
-    #}
+    dist_stat = {
+        'mean': (np.mean(x_dist_ab) + np.mean(x_dist_ba)) / 2,
+        'rms': (np.sqrt(np.mean(x_dist_ab ** 2)) + np.sqrt(np.mean(x_dist_ba ** 2))) / 2,
+        'q95': (np.quantile(x_dist_ab, 0.95) + np.quantile(x_dist_ba, 0.95)) / 2,
+        'max': np.maximum(np.max(x_dist_ab),np.max(x_dist_ba))
+    }
 
     # Write distance statistics
-    #with open(workspace.fit_dist_stat, 'wt') as jsonfile:
-    #    json.dump(dist_stat, jsonfile)
-
-
-
+    with open(workspace.fit_dist_stat, 'wt') as jsonfile:
+        json.dump(dist_stat, jsonfile)
 
 
 if __name__ == '__main__':
@@ -852,6 +867,11 @@ if __name__ == '__main__':
     # Load the template
     template = Template(args.template_dir)
 
+    # Some parameters can be specified in the template or by user
+    reduction = template.get_cruise_inflate_reduction() 
+    if args.reduction is not None:
+        reduction = args.reduction
+
     # Load the ASHS experiment
     ashs = ASHSFolder(args.ashs_dir, args.side, args.fusion_stage, args.correction_mode)
     ashs.load_posteriors(template)
@@ -879,7 +899,7 @@ if __name__ == '__main__':
 
         # Perform postprocessing
         print("Mapping ASHS labels on the inflated template")
-        cruise_postproc(template, ashs, workspace)
+        cruise_postproc(template, ashs, workspace, reduction=reduction)
 
     # Perform the registration
     if args.skip_reg is False:
@@ -889,7 +909,7 @@ if __name__ == '__main__':
         if args.keops is True:
             subject_to_template_registration_keops(template, workspace, device)
         else:
-            subject_to_template_registration_fast_cpu(template, workspace, device, args.reduction)
+            subject_to_template_registration_fast_cpu(template, workspace, device, reduction=reduction)
 
     if args.skip_omt is False:
         # Perform the OMT matching

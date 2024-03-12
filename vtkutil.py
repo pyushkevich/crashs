@@ -71,6 +71,11 @@ def vtk_set_field_data(pd, name, array):
     pd.GetFieldData().AddArray(a)
     return pd
 
+# Get generic field data
+def vtk_get_field_data(pd, name):
+    a = pd.GetFieldData().GetArray(name)
+    return vtk_to_numpy(a) if a is not None else None
+
 # Map a cell array to a point array
 def vtk_cell_array_to_point_array(pd, name):
     cell_to_point = vtk.vtkCellDataToPointData()
@@ -80,14 +85,15 @@ def vtk_cell_array_to_point_array(pd, name):
     vtk_set_point_array(pd, name, vtk_get_point_array(cell_to_point.GetOutput(), name))
 
 # Make a VTK polydata from vertices and triangles
-def vtk_make_pd(v, f):
+def vtk_make_pd(v, f=None):
     pd = vtk.vtkPolyData()
     pts = vtk.vtkPoints()
     pts.SetData(numpy_to_vtk(v))
     pd.SetPoints(pts)
-    ca = vtk.vtkCellArray()
-    ca.SetCells(f.shape[0], numpy_to_vtk(np.insert(f, 0, 3, axis=1).ravel(), array_type=vtk.VTK_ID_TYPE))
-    pd.SetPolys(ca)
+    if f is not None:
+        ca = vtk.vtkCellArray()
+        ca.SetCells(f.shape[0], numpy_to_vtk(np.insert(f, 0, 3, axis=1).ravel(), array_type=vtk.VTK_ID_TYPE))
+        pd.SetPolys(ca)
     return pd
 
 # Clone an existing PD
@@ -141,6 +147,54 @@ def vtk_sample_point_array_at_vertices(pd_src, array, x_samples):
         cell.EvaluatePosition(x_samples[j,:], c, subId, pcoord, d, wgt)
         result[j] = np.sum(np.stack([ array[cell.GetPointId(i),:] * w for i, w in enumerate(wgt) ]), 0)
     return result
+
+
+# Compute the distance from source mesh to target mesh at each vertex of
+# the source mesh and return as an array
+def vtk_pointset_to_mesh_distance(pd_src, pd_trg):
+
+    # Use the locator to sample from the halfway mesh
+    loc = vtk.vtkCellLocator()
+    loc.SetDataSet(pd_trg)
+    loc.BuildLocator()
+    x = vtk_get_points(pd_src)
+    x_to_subj = np.zeros_like(x)
+    x_dist = np.zeros(x.shape[0])
+    
+    cellId = vtk.reference(0)
+    c = [0.0, 0.0, 0.0]
+    subId = vtk.reference(0)
+    d = vtk.reference(0.0)
+    pcoord = [0.0, 0.0, 0.0]
+    wgt = [0.0, 0.0, 0.0]
+    for j in range(x.shape[0]):
+        loc.FindClosestPoint(x[j,:], c, cellId, subId, d)
+        pd_trg.GetCell(cellId).EvaluatePosition(x[j,:], c, subId, pcoord, d, wgt)
+        x_dist[j] = np.sqrt(d.get())
+
+    return x_dist
+
+
+
+# Apply a 4x4 affine matrix to a 3D mesh and its arrays
+def vtk_apply_sform(pd, sform, 
+                    point_coord_arrays=[], point_vector_arrays=[],
+                    cell_coord_arrays=[], cell_vector_arrays=[]):
+    
+    # Apply to the points
+    vtk_set_points(pd, vtk_get_points(pd) @ sform[:3,:3].T + sform[:3,3:].T)
+
+    # Apply to the coordinate arrays
+    for arr in point_coord_arrays:
+        vtk_set_point_array(pd, arr, vtk_get_point_array(pd, arr) @ sform[:3,:3].T + sform[:3,3:].T)
+    for arr in cell_coord_arrays:
+        vtk_set_cell_array(pd, arr, vtk_get_cell_array(pd, arr) @ sform[:3,:3].T + sform[:3,3:].T)
+
+    # Apply to the vector arrays
+    for arr in point_vector_arrays:
+        vtk_set_point_array(pd, arr, vtk_get_point_array(pd, arr) @ sform[:3,:3].T)
+    for arr in cell_vector_arrays:
+        vtk_set_cell_array(pd, arr, vtk_get_cell_array(pd, arr) @ sform[:3,:3].T)
 
 
 # Reduction using pymeshlab
