@@ -13,6 +13,7 @@ import subprocess
 import time
 import glob
 import SimpleITK as sitk
+import tempfile
 from vtkutil import *
 from lddmm import *
 from omt import *
@@ -481,6 +482,37 @@ def subject_to_template_registration_fast_cpu(template:Template, workspace: Work
     subprocess.run(cmd, shell=True)
 
 
+# This data structure simplifies creation of temporary files from meshdata
+class MeshDataTempFile:
+
+    def __init__(self, md:MeshData, filename:str):
+        _, self.fn_temp = tempfile.mkstemp(filename)
+        md.export(self.fn_temp)
+
+    def __str__(self):
+        return self.fn_temp
+    
+    def __del__(self):
+        os.remove(self.fn_temp)
+
+
+# Perform similarity registration using external tools
+def similarity_registration_lmshoot(md_temp, md_subj, fn_output, n_iter=50, sigma_varifold=10):
+
+    # Save the meshes to temporary locations
+    fn_temp = MeshDataTempFile(md_temp, 'template.vtk')
+    fn_subj = MeshDataTempFile(md_subj, 'subject.vtk')
+
+    # Run lmshoot to match to template
+    cmd = (f'lmshoot -d 3 -m {fn_temp} {fn_subj} -o {fn_output} '
+           f'-G -a V -S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
+    print('Executing: ', cmd)
+    subprocess.run(cmd, shell=True)
+
+    # Load the output matrix
+    return np.loadtxt(fn_output)
+
+    
 # Affine registration between a subject and template, using varifold data term
 # and Torch optimization
 def similarity_registration_keops(md_temp, md_subj, n_iter=50, sigma_varifold=10):
@@ -535,11 +567,34 @@ def similarity_registration_keops(md_temp, md_subj, n_iter=50, sigma_varifold=10
     return loss.item(), affine_mat
 
 
+def lddmm_fit_subject_jac_penalty_lmshoot(md_temp, md_subj, fn_momenta, fn_warped,
+                                          n_iter=50, nt=10, sigma_lddmm=5, sigma_varifold=10, 
+                                          gamma_lddmm=0.1, w_jac_penalty=1.0):
+    
+    # Save the meshes to temporary locations
+    fn_temp = MeshDataTempFile(md_temp, 'template.vtk')
+    fn_subj = MeshDataTempFile(md_subj, 'subject.vtk')
+
+    # Create a command to do registration
+    cmd = (f'lmshoot -d 3 -m {fn_temp} {fn_subj} -o {fn_momenta} '
+           f'-s {sigma_lddmm} -l 1 -g {gamma_lddmm} -J {w_jac_penalty} -R -n {nt} -a V '
+           f'-S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
+
+    print('Executing: ', cmd)
+    subprocess.run(cmd, shell=True)
+
+    # Run lmtowarp to apply the transformation to the full template
+    cmd = (f'lmtowarp -m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
+           f'-M {md_temp} {md_subj}')
+    print('Executing: ', cmd)
+    subprocess.run(cmd, shell=True)
+
+
 # Fit template to subject using LDDMM and KeOps, utilizing a Jacobian penalty
 # if requested
-def lddmm_fit_subject_jac_penalty(md_temp, md_subj, n_iter=50, nt=10,
-                                  sigma_lddmm=5, sigma_varifold=10, 
-                                  gamma_lddmm=0.1, w_jac_penalty=1.0):
+def lddmm_fit_subject_jac_penalty_keops(md_temp, md_subj, n_iter=50, nt=10,
+                                        sigma_lddmm=5, sigma_varifold=10, 
+                                        gamma_lddmm=0.1, w_jac_penalty=1.0):
 
     # LDDMM kernels
     device = md_temp.vt.device
@@ -593,17 +648,16 @@ def lddmm_fit_subject_jac_penalty(md_temp, md_subj, n_iter=50, nt=10,
 
 
 # LDDMM registration between the template and the individual inflated mesh
-def subject_to_template_registration_keops(template:Template, workspace: Workspace, device):
+def subject_to_template_registration_keops(template:Template, workspace: Workspace, 
+                                           device, use_keops = None):
+    
+    # Determine whether to use keops if not specified
+    if use_keops is None:
+        use_keops = device.type == 'cuda'
 
     # Load the template and put on the device
     fn_template_mesh = template.get_mesh(workspace.side)
     md_template = MeshData(load_vtk(fn_template_mesh), device)
-
-    # Downsample the meshes for affine registration (do we really need to?)
-    if md_template.v.shape[0] > 10000:
-        md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, 5000)
-    else:
-        md_template_ds = md_template
 
     # Load the subject and put on the device
     md_subject = MeshData(load_vtk(workspace.affine_moving), device)
@@ -611,13 +665,24 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     # Also load the reduced mesh
     md_subject_ds = MeshData(load_vtk(workspace.affine_moving_reduced), device)
 
-    # Perform similarity registration
-    _, affine_mat = similarity_registration_keops(
-        md_template_ds, md_subject_ds, n_iter=50, sigma_varifold=template.get_varifold_sigma())
-    
-    # Save the registration parameters
-    np.savetxt(workspace.affine_matrix, affine_mat)
+    # Downsample the template for affine registration 
+    if md_template.v.shape[0] > md_subject_ds.v.shape[0] * 1.5:
+        md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, md_subject_ds.v.shape[0])
+    else:
+        md_template_ds = md_template
 
+    # Perform similarity registration
+    if use_keops:
+        _, affine_mat = similarity_registration_keops(
+            md_template_ds, md_subject_ds, n_iter=50, sigma_varifold=template.get_varifold_sigma())
+            
+        # Save the registration parameters
+        np.savetxt(workspace.affine_matrix, affine_mat)
+
+    else:
+        _, affine_mat = similarity_registration_lmshoot(
+            md_template_ds, md_subject_ds, n_iter=50, sigma_varifold=template.get_varifold_sigma())
+    
     # Apply the affine registration parameters to the two meshes
     md_subject.apply_transform(affine_mat)
     md_subject.export(workspace.fit_target)
@@ -627,27 +692,41 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
 
     # Now perform the LDDMM deformation
     nt = template.get_lddmm_nt()
-    p_temp, q_fit = lddmm_fit_subject_jac_penalty(
-        md_template, md_subject_ds, n_iter=50, nt = nt,
-        sigma_lddmm=template.get_lddmm_sigma(),
-        sigma_varifold=template.get_varifold_sigma(),
-        gamma_lddmm=template.get_lddmm_gamma(),
-        w_jac_penalty=template.get_jacobian_penalty())
+    if use_keops:
+        p_temp, q_fit = lddmm_fit_subject_jac_penalty_keops(
+            md_template, md_subject_ds, n_iter=50, nt = nt,
+            sigma_lddmm=template.get_lddmm_sigma(),
+            sigma_varifold=template.get_varifold_sigma(),
+            gamma_lddmm=template.get_lddmm_gamma(),
+            w_jac_penalty=template.get_jacobian_penalty())
+        
+        # Save the fitting parameters
+        pd = load_vtk(template.get_mesh(workspace.side))
+        vtk_set_point_array(pd, 'Momentum', p_temp.cpu().detach().numpy())
+        vtk_set_field_data(pd, 'lddmm_sigma', template.get_lddmm_sigma())
+        vtk_set_field_data(pd, 'lddmm_nt', nt)
+        vtk_set_field_data(pd, 'lddmm_ralston', 1.)
+        save_vtk(pd, workspace.fit_lddmm_momenta)
 
-    # Save the fitting parameters
-    pd = load_vtk(template.get_mesh(workspace.side))
-    vtk_set_point_array(pd, 'Momentum', p_temp.cpu().detach().numpy())
-    vtk_set_field_data(pd, 'lddmm_sigma', template.get_lddmm_sigma())
-    vtk_set_field_data(pd, 'lddmm_nt', nt)
-    vtk_set_field_data(pd, 'lddmm_ralston', 1.)
-    save_vtk(pd, workspace.fit_lddmm_momenta)
+        # We now need to combine the affine and deformable components to bring the mesh
+        vtk_set_points(pd, q_fit.detach().cpu().numpy())
+        save_vtk(pd, workspace.fit_lddmm_result)
 
+    else:
+        # Perform the fitting
+        lddmm_fit_subject_jac_penalty_lmshoot(
+            md_template, md_subject_ds, 
+            workspace.fit_lddmm_momenta, workspace.fit_lddmm_result,
+            n_iter=50, nt = nt,
+            sigma_lddmm=template.get_lddmm_sigma(),
+            sigma_varifold=template.get_varifold_sigma(),
+            gamma_lddmm=template.get_lddmm_gamma(),
+            w_jac_penalty=template.get_jacobian_penalty())
+        
     # We now need to combine the affine and deformable components to bring the mesh
     # into the space of the subject
-    A_inv = np.linalg.inv(affine_mat[:3,:3])
-    b_inv = - A_inv @ affine_mat[:3,3:]
-    vtk_set_points(pd, q_fit.detach().cpu().numpy())
-    save_vtk(pd, workspace.fit_lddmm_result)
+    #A_inv = np.linalg.inv(affine_mat[:3,:3])
+    #b_inv = - A_inv @ affine_mat[:3,3:]
 
 
 def subject_to_template_fit_omt(template:Template, workspace: Workspace, device):
