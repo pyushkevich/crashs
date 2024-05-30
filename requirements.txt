@@ -5,3 +5,4 @@ pymeshlab
 vtk
 SimpleITK
 geomloss
+statsmodels

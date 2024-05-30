@@ -424,6 +424,7 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace, re
 
 # LDDMM registration between the template and the individual inflated mesh
 # using lmshoot (much faster on the CPU than pykeops)
+"""
 def subject_to_template_registration_fast_cpu(template:Template, workspace: Workspace, device, reduction=None):
 
     # Load the template and put on the device
@@ -480,7 +481,7 @@ def subject_to_template_registration_fast_cpu(template:Template, workspace: Work
            '-M {template_full} {fitted_full}').format(**cmd_param)
     print('Executing: ', cmd)
     subprocess.run(cmd, shell=True)
-
+"""
 
 # This data structure simplifies creation of temporary files from meshdata
 class MeshDataTempFile:
@@ -504,7 +505,7 @@ def similarity_registration_lmshoot(md_temp, md_subj, fn_output, n_iter=50, sigm
     fn_subj = MeshDataTempFile(md_subj, 'subject.vtk')
 
     # Run lmshoot to match to template
-    cmd = (f'lmshoot -d 3 -m {fn_temp} {fn_subj} -o {fn_output} '
+    cmd = (f'lmshoot -d 3 -m {fn_subj} {fn_temp} -o {fn_output} '
            f'-G -a V -S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
     print('Executing: ', cmd)
     subprocess.run(cmd, shell=True)
@@ -567,11 +568,13 @@ def similarity_registration_keops(md_temp, md_subj, n_iter=50, sigma_varifold=10
     return loss.item(), affine_mat
 
 
-def lddmm_fit_subject_jac_penalty_lmshoot(md_temp, md_subj, fn_momenta, fn_warped,
+def lddmm_fit_subject_jac_penalty_lmshoot(md_temp_full, md_temp, md_subj, 
+                                          fn_momenta, fn_warped,
                                           n_iter=50, nt=10, sigma_lddmm=5, sigma_varifold=10, 
                                           gamma_lddmm=0.1, w_jac_penalty=1.0):
     
     # Save the meshes to temporary locations
+    fn_temp_full = MeshDataTempFile(md_temp_full, 'template_full.vtk')
     fn_temp = MeshDataTempFile(md_temp, 'template.vtk')
     fn_subj = MeshDataTempFile(md_subj, 'subject.vtk')
 
@@ -585,7 +588,7 @@ def lddmm_fit_subject_jac_penalty_lmshoot(md_temp, md_subj, fn_momenta, fn_warpe
 
     # Run lmtowarp to apply the transformation to the full template
     cmd = (f'lmtowarp -m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
-           f'-M {md_temp} {md_subj}')
+           f'-M {fn_temp_full} {fn_warped}')
     print('Executing: ', cmd)
     subprocess.run(cmd, shell=True)
 
@@ -648,8 +651,8 @@ def lddmm_fit_subject_jac_penalty_keops(md_temp, md_subj, n_iter=50, nt=10,
 
 
 # LDDMM registration between the template and the individual inflated mesh
-def subject_to_template_registration_keops(template:Template, workspace: Workspace, 
-                                           device, use_keops = None):
+def subject_to_template_registration(template:Template, workspace: Workspace, device, 
+                                     use_keops = None, reduction = None, lddmm_iter = 50):
     
     # Determine whether to use keops if not specified
     if use_keops is None:
@@ -666,12 +669,13 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     md_subject_ds = MeshData(load_vtk(workspace.affine_moving_reduced), device)
 
     # Downsample the template for affine registration 
-    if md_template.v.shape[0] > md_subject_ds.v.shape[0] * 1.5:
-        md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, md_subject_ds.v.shape[0])
-    else:
-        md_template_ds = md_template
+    md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, reduction)
 
     # Perform similarity registration
+    print(f'Performing similarity and LDDMM registration')
+    print(f'  template mesh: ({md_template_ds.v.shape[0]},{md_template_ds.f.shape[0]})')
+    print(f'  target mesh:   ({md_subject_ds.v.shape[0]}, {md_subject_ds.f.shape[0]})')
+
     if use_keops:
         _, affine_mat = similarity_registration_keops(
             md_template_ds, md_subject_ds, n_iter=50, sigma_varifold=template.get_varifold_sigma())
@@ -680,8 +684,9 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
         np.savetxt(workspace.affine_matrix, affine_mat)
 
     else:
-        _, affine_mat = similarity_registration_lmshoot(
-            md_template_ds, md_subject_ds, n_iter=50, sigma_varifold=template.get_varifold_sigma())
+        affine_mat = similarity_registration_lmshoot(
+            md_template_ds, md_subject_ds, workspace.affine_matrix, 
+            n_iter=50, sigma_varifold=template.get_varifold_sigma())
     
     # Apply the affine registration parameters to the two meshes
     md_subject.apply_transform(affine_mat)
@@ -693,8 +698,9 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     # Now perform the LDDMM deformation
     nt = template.get_lddmm_nt()
     if use_keops:
+        # TODO: why is the target reduced and the template full-resolution?
         p_temp, q_fit = lddmm_fit_subject_jac_penalty_keops(
-            md_template, md_subject_ds, n_iter=50, nt = nt,
+            md_template, md_subject_ds, n_iter=lddmm_iter, nt = nt,
             sigma_lddmm=template.get_lddmm_sigma(),
             sigma_varifold=template.get_varifold_sigma(),
             gamma_lddmm=template.get_lddmm_gamma(),
@@ -715,9 +721,9 @@ def subject_to_template_registration_keops(template:Template, workspace: Workspa
     else:
         # Perform the fitting
         lddmm_fit_subject_jac_penalty_lmshoot(
-            md_template, md_subject_ds, 
+            md_template, md_template_ds, md_subject_ds, 
             workspace.fit_lddmm_momenta, workspace.fit_lddmm_result,
-            n_iter=50, nt = nt,
+            n_iter=lddmm_iter, nt = nt,
             sigma_lddmm=template.get_lddmm_sigma(),
             sigma_varifold=template.get_varifold_sigma(),
             gamma_lddmm=template.get_lddmm_gamma(),
@@ -935,6 +941,8 @@ if __name__ == '__main__':
                     help='Use KeOps routines for registration and OMT (GPU needed)')
     parse.add_argument('-r', '--reduction', type=float, 
                     help='Reduction to apply to meshes for geodesic shooting', default=None)
+    parse.add_argument('--lddmm-iter', type=int, default=50,
+                    help='Number of iterations for geodesic shooting')
     parse.add_argument('--skip-reg', action='store_true',
                        help='Skip the registration step')
     parse.add_argument('--skip-omt', action='store_true',
@@ -985,16 +993,11 @@ if __name__ == '__main__':
 
         # Affine and LDDMM registration between template and subject
         print("Registering template to subject")
-        if args.keops is True:
-            subject_to_template_registration_keops(template, workspace, device)
-        else:
-            subject_to_template_registration_fast_cpu(template, workspace, device, reduction=reduction)
+        subject_to_template_registration(template, workspace, device, 
+                                         use_keops=args.keops, reduction=reduction, lddmm_iter=args.lddmm_iter)
 
     if args.skip_omt is False:
         # Perform the OMT matching
         print("Matching template to subject using OMT")
-        if args.keops is True:
-            subject_to_template_fit_omt_keops(template, workspace, device)
-        else:
-            subject_to_template_fit_omt(template, workspace, device)
+        subject_to_template_fit_omt_keops(template, workspace, device)
 

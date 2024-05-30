@@ -332,6 +332,9 @@ def extract_zero_levelset(img_levelset, edge_len_pct=1.0, to_ras=True):
     # Apply remeshing to the template
     ms = pymeshlab.MeshSet()
     ms.add_mesh(pymeshlab.Mesh(vertex_matrix=vtk_get_points(pd_cubes), face_matrix=vtk_get_triangles(pd_cubes)))
-    ms.meshing_isotropic_explicit_remeshing(targetlen = pymeshlab.Percentage(edge_len_pct))
+    if hasattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing') and callable(getattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing')):
+        ms.meshing_isotropic_explicit_remeshing(targetlen = pymeshlab.Percentage(edge_len_pct))
+    else:
+        ms.remeshing_isotropic_explicit_remeshing(targetlen = pymeshlab.Percentage(edge_len_pct))
     v_remesh, f_remesh = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
     return vtk_make_pd(v_remesh, f_remesh)
