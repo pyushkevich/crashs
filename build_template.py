@@ -11,7 +11,8 @@ from sklearn.decomposition import PCA
 from vtkutil import *
 from lddmm import *
 from omt import *
-from crashs import MeshData, Template, ASHSFolder, Workspace, ashs_output_to_cruise_input, run_cruise, cruise_postproc
+from util import MeshData, Template, ASHSFolder, Workspace
+from crashs import ashs_output_to_cruise_input, run_cruise, cruise_postproc
 from crashs import omt_match_fitted_template_to_target
 
 # Workspace for building the template
@@ -689,7 +690,7 @@ if __name__ == '__main__':
 
             # Convert the inputs into probability maps
             print("Converting ASHS-T1 posteriors to CRUISE inputs")
-            ashs_output_to_cruise_input(template, ashs.posteriors, workspace)
+            ashs_output_to_cruise_input(template, ashs, workspace)
 
             # Run CRUISE on the inputs
             print("Running CRUISE to correct topology and compute inflated surface")

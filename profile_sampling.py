@@ -8,7 +8,7 @@ import pathlib
 import SimpleITK as sitk
 import torch
 from pykeops.torch import LazyTensor
-from crashs import Workspace
+from util import Workspace
 from vtkutil import *
 
 def do_sampling(args):

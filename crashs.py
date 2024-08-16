@@ -14,201 +14,18 @@ import time
 import glob
 import SimpleITK as sitk
 import tempfile
+from picsl_c3d import Convert3D
+from util import *
 from vtkutil import *
 from lddmm import *
 from omt import *
-
-# Class that represents a surface mesh for use in PyTorch
-class MeshData:
-    def __init__(self, pd:vtk.vtkPolyData, device, target_faces=None, transform=None):
-        self.pd = vtk_all_point_arrays_to_cell_arrays(pd)
-        self.v, self.f = vtk_get_points(self.pd), vtk_get_triangles(self.pd)
-        self.lp = vtk_get_cell_array(self.pd, 'plab')
-        if target_faces is not None:
-            # Perform decimation
-            vd, fd = decimate(self.v, self.f, target_faces)
-
-            # Get new cell probability labels
-            pd_tmp = vtk_make_pd(vd, fd)
-            vtk_set_point_array(pd_tmp, 'plab', vtk_sample_cell_array_at_vertices(self.pd, self.lp, vd))
-            pd_tmp = vtk_all_point_arrays_to_cell_arrays(pd_tmp)
-
-            self.v, self.f = vd, fd
-            self.lp = vtk_get_cell_array(pd_tmp, 'plab')
-        if transform is not None:
-            self.v = np.einsum('ij,kj->ki', transform[:3,:3], self.v) + transform[:3,3]
-
-        self.vt = torch.tensor(self.v, dtype=torch.float32, device=device).contiguous()
-        self.ft = torch.tensor(self.f, dtype=torch.long, device=device).contiguous()
-        self.lpt = torch.tensor(self.lp, dtype=torch.float32, device=device).contiguous()
-
-    def apply_transform(self, transform):
-        vtk_apply_sform(self.pd, transform)
-        self.v = vtk_get_points(self.pd)
-        self.vt = torch.tensor(self.v, dtype=torch.float32, device=device).contiguous()
-
-    def export(self, fn):
-        pd_reduced = vtk_make_pd(self.v, self.f)
-        vtk_set_cell_array(pd_reduced, 'plab', self.lp)
-        vtk_set_cell_array(pd_reduced, 'label', np.argmax(self.lp, axis=1))
-        save_vtk(pd_reduced, fn)
-
-
-# Class that represents information about a template
-class Template :
-    def __init__(self, template_dir):
-        # Store the template directory
-        self.root = template_dir
-
-        # Load the template json
-        with open(os.path.join(template_dir, 'template.json')) as template_json:
-            self.json = json.load(template_json)
-
-    def get_mesh(self, side):
-        return os.path.join(self.root, self.json['sides'][side]['mesh'])
-
-    def get_labels_for_tissue_class(self, tissue_class):
-        return self.json['ashs_label_type'][tissue_class]
-    
-    def get_labels_surface_matching(self):
-        return self.json['labels_for_surface_matching']
-
-    def get_varifold_sigma(self):
-        return self.json['registration']['varifold_sigma']
-
-    def get_lddmm_sigma(self):
-        return self.json['registration']['lddmm_sigma']
-
-    def get_lddmm_gamma(self):
-        return self.json['registration']['lddmm_gamma']
-
-    def get_lddmm_nt(self):
-        return self.json['registration']['lddmm_nt']
-    
-    def get_jacobian_penalty(self):
-        return self.json['registration'].get('jacobian_penalty', 0.)
-
-    def get_cruise_inflate_maxiter(self):
-        return self.json.get('cruise', dict()).get('inflate_maxiter', 500)
-
-    def get_cruise_laminar_n_layers(self):
-        return self.json.get('cruise', dict()).get('laminar_n_layers', 4)
-
-    def get_cruise_laminar_method(self):
-        return self.json.get('cruise', dict()).get('laminar_method', 'distance-preserving')
-    
-    def get_cruise_inflate_reduction(self):
-        return self.json.get('cruise', dict()).get('inflate_reduction', None)
-
-    def get_remeshing_edge_len_pct(self):
-        return self.json.get('template_build', dict()).get('remeshing_edge_length_pct', 1.0)
-    
-    def get_build_iteration_schedule(self):
-        return self.json.get('template_build', dict()).get('schedule', [10,10,10,50])
-
-    def get_build_root_sigma_factor(self):
-        return self.json.get('template_build', dict()).get('root_sigma_factor', 2.4)
-
-
-
-
-        
-# Class to represent an ASHS output folder and the files that we need from
-# ASHS for this script
-class ASHSFolder:
-    def __init__(self, ashs_dir, side, fusion_mode, correction_mode):
-
-        # How posteriors are coded
-        pstr = 'posterior' if correction_mode == 'heur' else f'posterior_{correction_mode}'
-
-        # Set the posterior pattern
-        self.posterior_pattern = os.path.join(
-            ashs_dir, 
-            f'{fusion_mode}/fusion/{pstr}_{side}_%03d.nii.gz')
-
-        # Load the affine transform to the template
-        self.affine_to_template = np.loadtxt(os.path.join(
-            ashs_dir, 'affine_t1_to_template/t1_to_template_affine.mat'))
-        
-
-    def load_posteriors(self, template:Template):
-
-        # Load the posteriors
-        self.posteriors = {}
-        for lab in ['wm', 'gm', 'bg']:
-            for v in template.get_labels_for_tissue_class(lab):
-                img=self.posterior_pattern % (v,)
-                if os.path.exists(img):
-                    self.posteriors[v] = sitk.ReadImage(img)
-
-
-class Workspace:
-
-    # Define output files
-    def fn_cruise(self, suffix):
-        return os.path.join(self.cruise_dir, f'{self.expid}_{suffix}')
-
-    # Define output files
-    def fn_fit(self, suffix):
-        return os.path.join(self.fit_dir, f'{self.expid}_{suffix}')
-
-    def __init__(self, output_dir, expid, side):
-        self.output_dir = output_dir
-        self.expid = expid
-        self.side = side
-
-        # Define and create output directories
-        self.cruise_dir = os.path.join(self.output_dir, 'cruise')
-        self.fit_dir = os.path.join(self.output_dir, 'fitting')
-        os.makedirs(self.cruise_dir, exist_ok=True)
-        os.makedirs(self.fit_dir, exist_ok=True)
-
-        self.cruise_fn_base = f'{self.expid}_mtl'
-        self.cruise_wm_prob = self.fn_cruise('wm_prob.nii.gz')
-        self.cruise_gm_prob = self.fn_cruise('gm_prob.nii.gz')
-        self.cruise_bg_prob = self.fn_cruise('bg_prob.nii.gz')
-        self.cruise_wm_mask = self.fn_cruise('wm_mask_lcomp.nii.gz')
-        self.cruise_infl_mesh = self.fn_cruise('mtl_avg_infl-mesh.vtk')
-        self.cruise_infl_mesh_labeled = self.fn_cruise('mtl_avg_infl-mesh-ras-labeled.vtk')
-        self.cruise_middepth_mesh = self.fn_cruise('mtl_avg_l2m-mesh.vtk')
-        self.cruise_sform = self.fn_cruise('sform.mat')
-
-        self.affine_moving = self.fn_fit('affine_moving.vtk')
-        self.affine_moving_reduced = self.fn_fit('affine_moving_reduced.vtk')
-        self.affine_matrix = self.fn_fit('affine_matrix.mat')
-        self.fit_template = self.fn_fit('fit_template.vtk')
-        self.fit_target = self.fn_fit('fit_target.vtk')
-        self.fit_target_reduced = self.fn_fit('fit_target_reduced.vtk')
-        self.fit_template_reduced = self.fn_fit('fit_template_reduced.vtk')
-        self.fit_lddmm_momenta_reduced = self.fn_fit('fit_lddmm_momenta_reduced.vtk')
-        self.fit_lddmm_momenta = self.fn_fit('fit_lddmm_momenta.vtk')
-        self.fit_lddmm_result = self.fn_fit('fitted_lddmm_template.vtk')
-        self.fit_omt_match = self.fn_fit('fitted_omt_match.vtk')
-        self.fit_omt_hw_target = self.fn_fit('fitted_omt_hw_target.vtk')
-        self.fit_omt_match_to_hw = self.fn_fit('fitted_omt_match_to_hw.vtk')
-        self.fit_dist_stat = self.fn_fit('fitted_dist_stat.json')
-
-    def fn_fit_profile_mesh(self, k:int):
-        return self.fn_fit(f'fitted_omt_match_to_p{k:02d}.vtk')
-
-    def fn_fit_profile_meshes(self):
-        return glob.glob(self.fn_fit(f'fitted_omt_match_to_p??.vtk'))
-
-
-# Load the available label posteriors into a dictionary
-#def load_ashs_posteriors(template:Template, posterior_pattern):
-#    p = {}
-#    for lab in ['wm', 'gm', 'bg']:
-#        for v in template.get_labels_for_tissue_class(lab):
-#            img=posterior_pattern % (v,)
-#            if os.path.exists(img):
-#                p[v] = sitk.ReadImage(img)
-#    return p
+from preprocess_t2 import import_ashs_t2
 
 
 # Routine to convert ASHS posterior probabilities to CRUISE inputs
-def ashs_output_to_cruise_input(template:Template, ashs_posteriors: dict, workspace: Workspace):
+def ashs_output_to_cruise_input(template:Template, ashs: ASHSFolder, workspace: Workspace):
     
+    """     
     # Available posterior images for each class
     idat = {}
 
@@ -237,8 +54,13 @@ def ashs_output_to_cruise_input(template:Template, ashs_posteriors: dict, worksp
     x[:,:,:,2] = np.where(x.max(axis=3) == 0., 1.0, x[:,:,:,2])
 
     # Compute the softmax
-    y = scipy.special.softmax(x * 10, axis=3)
+    y = scipy.special.softmax(x * 10, axis=3) """
 
+    # Convert posteriors to tissue probability images
+    tissue_cat = ['wm', 'gm', 'bg']
+    tissue_cat_labels = { k: template.get_labels_for_tissue_class(k) for k in tissue_cat }
+    idat, y = ashs_posteriors_to_tissue_probabilities(ashs.posteriors, tissue_cat_labels, tissue_cat, 'bg')
+    
     # Write each of the images
     def write(z, f_name):
         img_result = sitk.GetImageFromArray(z)
@@ -407,7 +229,7 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace, re
         save_vtk(pd_lset, workspace.fn_cruise(f'mtl_{lset}_l2m-mesh-ras.vtk'))
 
     # Apply the affine transform from ASHS, taking the mesh to template space
-    M = np.linalg.inv(ashs.affine_to_template)
+    M = np.linalg.inv(np.loadtxt(ashs.affine_to_template))
     x_infl = x_infl @ M[:3,:3].T + M[:3,3:].T 
     vtk_set_points(pd_infl, x_infl)
     save_vtk(pd_infl, workspace.affine_moving)
@@ -968,17 +790,25 @@ if __name__ == '__main__':
     workspace = Workspace(args.output_dir, expid, args.side)
 
     # Determine the device to use in torch
-    device = torch.device(args.device) if torch.cuda.is_available() else 'cpu'
+    device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
     print("CUDA available    : ", torch.cuda.is_available())
     print("CUDA device count : ", torch.cuda.device_count())
     print("Selected device   : ", device)
+
+    # Determine if the current template requires additional postprocessing steps
+    # to convert the ASHS output into an input suitable for CRASHS
+    if template.get_preprocessing_mode() == 't2_alveus':
+        fn_preproc = f'{args.output_dir}/preprocess/t2_alveus'
+        print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
+        upsampled_posterior_pattern = import_ashs_t2(ashs, template, fn_preproc, expid, device)
+        ashs.set_alternate_posteriors(upsampled_posterior_pattern)
 
     # Perform the import and CRUISE steps
     if args.skip_cruise is False:
 
         # Convert the inputs into probability maps
         print("Converting ASHS-T1 posteriors to CRUISE inputs")
-        ashs_output_to_cruise_input(template, ashs.posteriors, workspace)
+        ashs_output_to_cruise_input(template, ashs, workspace)
 
         # Run CRUISE on the inputs
         print("Running CRUISE to correct topology and compute inflated surface")
