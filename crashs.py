@@ -15,6 +15,7 @@ import glob
 import SimpleITK as sitk
 import tempfile
 from picsl_c3d import Convert3D
+from picsl_greedy import LMShoot3D
 from util import *
 from vtkutil import *
 from lddmm import *
@@ -316,7 +317,8 @@ class MeshDataTempFile:
         return self.fn_temp
     
     def __del__(self):
-        os.remove(self.fn_temp)
+        pass
+        ### os.remove(self.fn_temp)
 
 
 # Perform similarity registration using external tools
@@ -327,10 +329,11 @@ def similarity_registration_lmshoot(md_temp, md_subj, fn_output, n_iter=50, sigm
     fn_subj = MeshDataTempFile(md_subj, 'subject.vtk')
 
     # Run lmshoot to match to template
-    cmd = (f'lmshoot -d 3 -m {fn_subj} {fn_temp} -o {fn_output} '
+    lm = LMShoot3D()
+    print(f'lmshoot -m {fn_subj} {fn_temp} -o {fn_output} '
            f'-G -a V -S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
-    print('Executing: ', cmd)
-    subprocess.run(cmd, shell=True)
+    lm.fit(f'-m {fn_subj} {fn_temp} -o {fn_output} '
+           f'-G -a V -S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
 
     # Load the output matrix
     return np.loadtxt(fn_output)
@@ -401,18 +404,19 @@ def lddmm_fit_subject_jac_penalty_lmshoot(md_temp_full, md_temp, md_subj,
     fn_subj = MeshDataTempFile(md_subj, 'subject.vtk')
 
     # Create a command to do registration
-    cmd = (f'lmshoot -d 3 -m {fn_temp} {fn_subj} -o {fn_momenta} '
+    lm = LMShoot3D()
+    print(f'-m {fn_temp} {fn_subj} -o {fn_momenta} '
+          f'-s {sigma_lddmm} -l 1 -g {gamma_lddmm} -J {w_jac_penalty} -R -n {nt} -a V '
+          f'-S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
+    lm.fit(f'-m {fn_temp} {fn_subj} -o {fn_momenta} '
            f'-s {sigma_lddmm} -l 1 -g {gamma_lddmm} -J {w_jac_penalty} -R -n {nt} -a V '
            f'-S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
 
-    print('Executing: ', cmd)
-    subprocess.run(cmd, shell=True)
-
     # Run lmtowarp to apply the transformation to the full template
-    cmd = (f'lmtowarp -m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
-           f'-M {fn_temp_full} {fn_warped}')
-    print('Executing: ', cmd)
-    subprocess.run(cmd, shell=True)
+    print(f'-m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
+          f'-M {fn_temp_full} {fn_warped}')
+    lm.apply(f'-m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
+             f'-M {fn_temp_full} {fn_warped}')
 
 
 # Fit template to subject using LDDMM and KeOps, utilizing a Jacobian penalty
@@ -802,6 +806,7 @@ if __name__ == '__main__':
         print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
         upsampled_posterior_pattern = import_ashs_t2(ashs, template, fn_preproc, expid, device)
         ashs.set_alternate_posteriors(upsampled_posterior_pattern)
+        ashs.load_posteriors(template)
 
     # Perform the import and CRUISE steps
     if args.skip_cruise is False:

@@ -4,6 +4,29 @@ import pymeshlab
 import numpy as np
 import SimpleITK as sitk
 
+# We need to create some aliases for pymeshlab functions and classes because of the
+# changing API and issues with compatibility on older systems
+class PyMeshLabInterface:
+
+    @staticmethod
+    def percentage(x):
+        return pymeshlab.PercentageValue(x) if hasattr(pymeshlab, 'PercentageValue') else pymeshlab.Percentage(x)
+    
+    @staticmethod
+    def meshing_isotropic_explicit_remeshing(ms:pymeshlab.MeshSet, **kwargs):
+        if hasattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing') and callable(getattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing')):
+            ms.meshing_isotropic_explicit_remeshing(**kwargs)
+        else:
+            ms.remeshing_isotropic_explicit_remeshing(**kwargs)
+
+    @staticmethod
+    def meshing_decimation_quadric_edge_collapse(ms:pymeshlab.MeshSet, **kwargs):
+        if hasattr(pymeshlab.MeshSet, 'meshing_decimation_quadric_edge_collapse') and callable(getattr(pymeshlab.MeshSet, 'meshing_decimation_quadric_edge_collapse')):
+            ms.meshing_decimation_quadric_edge_collapse(**kwargs)
+        else:
+            ms.simplification_quadric_edge_collapse_decimation(**kwargs)
+
+
 # Read VTK mesh
 def load_vtk(filename):
     rd = vtk.vtkPolyDataReader()
@@ -210,18 +233,9 @@ def decimate(v, f, target_faces):
     # Perform decimation
     tf = int(target_faces * f.shape[0]) if target_faces < 1.0 else int(target_faces)
     print(f'Decimating mesh, target: {tf} faces')
-    if hasattr(pymeshlab.MeshSet, 'meshing_decimation_quadric_edge_collapse') and callable(getattr(pymeshlab.MeshSet, 'meshing_decimation_quadric_edge_collapse')):
-        ms.meshing_decimation_quadric_edge_collapse(targetfacenum=tf,
-                                                    preserveboundary=True,
-                                                    preservenormal=True,
-                                                    preservetopology=True,
-                                                    planarquadric=True)
-    else:
-        ms.simplification_quadric_edge_collapse_decimation(targetfacenum=tf,
-                                                           preserveboundary=True,
-                                                           preservenormal=True,
-                                                           preservetopology=True,
-                                                           planarquadric=True)
+    PyMeshLabInterface.meshing_decimation_quadric_edge_collapse(
+        ms, targetfacenum=tf, preserveboundary=True, preservenormal=True,
+        preservetopology=True, planarquadric=True)
     m0 = ms.mesh(0)
     print(f'Decimation complete, {m0.face_matrix().shape[0]} faces')
 
@@ -332,9 +346,7 @@ def extract_zero_levelset(img_levelset, edge_len_pct=1.0, to_ras=True):
     # Apply remeshing to the template
     ms = pymeshlab.MeshSet()
     ms.add_mesh(pymeshlab.Mesh(vertex_matrix=vtk_get_points(pd_cubes), face_matrix=vtk_get_triangles(pd_cubes)))
-    if hasattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing') and callable(getattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing')):
-        ms.meshing_isotropic_explicit_remeshing(targetlen = pymeshlab.Percentage(edge_len_pct))
-    else:
-        ms.remeshing_isotropic_explicit_remeshing(targetlen = pymeshlab.Percentage(edge_len_pct))
+    PyMeshLabInterface.meshing_isotropic_explicit_remeshing(
+        ms, targetlen = PyMeshLabInterface.percentage(edge_len_pct))
     v_remesh, f_remesh = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
     return vtk_make_pd(v_remesh, f_remesh)

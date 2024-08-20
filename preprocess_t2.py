@@ -205,15 +205,16 @@ def postprocess_upsample(
     
     # Compute softmax and an updated segmentation
     c3d.execute(f'-foreach-comp {len(label_order)} -as P -thresh 0.5 inf 1 0 -times -insert P 1 '
-                f'-fast-marching 20 -reciprocal -endfor -foreach -scale 10 -endfor -softmax ')
+                f'-fast-marching 20 -reciprocal -endfor -foreach -scale 10 -endfor -softmax -info')
     
     # We can now output the new posteriors for CRASHS to use.
     upsampled_posterior_pattern = f'{ws.dir_new_posteriors}/preproc_posterior_%03d.nii.gz'
-    fn_post = ' '.join([upsampled_posterior_pattern % (label,) for label in label_order])
-    reps = ' '.join([ f'{i} {label}' for i, label in enumerate(label_order)])
+    for i, label in enumerate(label_order):
+        sitk.WriteImage(c3d.peek(i), upsampled_posterior_pattern % (label,))
 
-    # Finally save the alternative (upsampled) posteriors and a combined segmentation 
-    c3d.execute(f'-oo {fn_post} -vote -dup -lstat -pop -replace {reps} -o {tmppref}_ivseg_ashs_upsample.nii.gz')
+    # Also combine the posteriors into a segmentation 
+    reps = ' '.join([ f'{i} {label}' for i, label in enumerate(label_order)])
+    c3d.execute(f'-vote -replace {reps} -o {tmppref}_ivseg_ashs_upsample.nii.gz')
     
     # Finally, output the new posteriors
     return upsampled_posterior_pattern
