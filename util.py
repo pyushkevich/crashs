@@ -149,8 +149,8 @@ class ASHSFolder:
 
         # Required matrix files
         self.affine_to_template = find_file(f'{ashs_dir}/affine_t1_to_template/t1_to_template_affine.mat')
-        self.affine_t2_to_t1 = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1.mat')
-        self.affine_t1_to_t2 = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1_inv.mat')
+        self.affine_t2f_t1m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1.mat')
+        self.affine_t1f_t2m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1_inv.mat')
 
     def set_alternate_posteriors(self, pattern):
         self.posterior_pattern = pattern
@@ -181,9 +181,11 @@ class Workspace:
     def fn_cruise(self, suffix):
         return os.path.join(self.cruise_dir, f'{self.expid}_{suffix}')
 
-    # Define output files
     def fn_fit(self, suffix):
         return os.path.join(self.fit_dir, f'{self.expid}_{suffix}')
+
+    def fn_thick(self, suffix):
+        return os.path.join(self.thick_dir, f'{self.expid}_{suffix}')
 
     def __init__(self, output_dir, expid, side):
         self.output_dir = output_dir
@@ -193,8 +195,10 @@ class Workspace:
         # Define and create output directories
         self.cruise_dir = os.path.join(self.output_dir, 'cruise')
         self.fit_dir = os.path.join(self.output_dir, 'fitting')
+        self.thick_dir = os.path.join(self.output_dir, 'thickness')
         os.makedirs(self.cruise_dir, exist_ok=True)
         os.makedirs(self.fit_dir, exist_ok=True)
+        os.makedirs(self.thick_dir, exist_ok=True)
 
         self.cruise_fn_base = f'{self.expid}_mtl'
         self.cruise_wm_prob = self.fn_cruise('wm_prob.nii.gz')
@@ -220,6 +224,12 @@ class Workspace:
         self.fit_omt_hw_target = self.fn_fit('fitted_omt_hw_target.vtk')
         self.fit_omt_match_to_hw = self.fn_fit('fitted_omt_match_to_hw.vtk')
         self.fit_dist_stat = self.fn_fit('fitted_dist_stat.json')
+
+        self.thick_boundary = self.fn_thick('thick_boundary_raw.vtk')
+        self.thick_boundary_sm = self.fn_thick('thick_boundary_smooth.vtk')
+        self.thick_tetra_mesh = self.fn_thick('thickness_tetra.vtk')
+        self.thick_skeleton = self.fn_thick('skeleton.vtk')
+        self.thick_result = self.fn_thick('template_thickness.vtk')
 
     def fn_fit_profile_mesh(self, k:int):
         return self.fn_fit(f'fitted_omt_match_to_p{k:02d}.vtk')

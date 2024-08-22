@@ -21,8 +21,8 @@ class PreprocessT2Workspace:
         self.fn_upsample_output_bin = f'{output_dir}/{id}_ivseg_unet_upsample_bin.nii.gz'
         self.fn_nnunet_input = f'{output_dir}/nnunet/input/MTL_000_0000.nii.gz'
         self.fn_nnunet_output = f'{output_dir}/nnunet/output/MTL_000.nii.gz'
+        self.fn_upsample_wm_seg = f'{output_dir}/{id}_upsample_wmseg.nii.gz'
         self.dir_new_posteriors = f'{output_dir}/posteriors'
-
 
 
 def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessT2Workspace, device):
@@ -80,6 +80,46 @@ def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessT2Workspa
         overwrite=True, num_processes_preprocessing=1, num_processes_segmentation_export=1)
     
 
+def add_wm_segmentation(
+        ashs:ASHSFolder, template:Template, nnunet_opts:dict,  ws: PreprocessT2Workspace, device):
+    
+    # Read the nnunet options from the preprocessing options
+    target_orientation = np.array(nnunet_opts["target_orientation"])
+    target_spacing = np.array(nnunet_opts["target_spacing"])
+
+    # Next we need to generate the white matter segmentation. For this, we need the
+    # whole-brain T1-weighted MRI. We extract the ROI around the segmentation and
+    # set the orientation to match that of the nnU-Net training data
+    c3d = Convert3D()
+    c3d.execute(f'{ashs.mprage} -as T1  {ashs.tse_native_chunk} -thresh -inf inf 1 0 '
+                f'-int 0 -reslice-matrix {ashs.affine_t1f_t2m} -trim 1vox '
+                f'-push T1 -reslice-identity -swapdim {target_orientation}')
+
+    # The T1 may need to be upsampled to target resolution before running nnU-Net. 
+    # We can read from the upsample folder what the target image orientation and
+    # target resolution are for the nnU-Net and then determine the upsampling
+    # factors that match this resolution and orientation most closely
+    source_spacing = np.array(c3d.peek(-1).GetSpacing())
+
+    # Compute the scaling factors and perform upsampling
+    upsample_factors = np.maximum(1, np.round(source_spacing / target_spacing))
+    upsample_vec = 'x'.join([str(int(x)) for x in upsample_factors])
+    print(f'Upsampling T1 ROI by {upsample_vec} using Non-Local Means')
+    c3d.execute(f'-nlm-denoise -nlm-upsample {upsample_vec} -o {ws.fn_nnunet_input}')
+
+    # Perform white matter segmentation    
+    nnunet_model = f'{template.root}/nnunet/{nnunet_opts["model"]}'
+    nnunet_wm_inference(template, nnunet_model, ws, device)
+
+    # Transform the white matter segmentation into T1 space
+    tmppref = f'{ws.output_dir}/tmp/{ws.id}'
+    g = Greedy3D()
+    g.execute(f'-threads 1 -rf {ws.fn_upsample_output_bin} '
+              f'-rm {ws.fn_nnunet_input} {tmppref}_t1sr_to_t2.nii.gz '
+              f'-ri LABEL 0.2mm -rm {ws.fn_nnunet_output} {ws.fn_upsample_wm_seg} '
+              f'-r {ashs.affine_t2f_t1m}')
+    
+
 def postprocess_upsample(
         ashs:ASHSFolder, template:Template, upsample_opts:dict,  ws: PreprocessT2Workspace):
     
@@ -131,10 +171,11 @@ def postprocess_upsample(
     # Reslice the WM segmentation into an upsampled T2 segmentation space and clean up,
     # getting rid of WM pixels that are too far from any GM, as well as any CSF stuck 
     # between GM and WM
+    # TODO: shoudn't we use the T1->T2 matrix here?
     thresh_level = 0.5
     c3d.execute(f'-clear -push img_up_gm -thresh {thresh_level} inf 1 0 -as G '
-                f'{ws.fn_nnunet_output} -thresh 1 1 1 0 -smooth 0.2mm -reslice-identity -thresh 0.5 inf 1 0 -popas WG '
-                f'-push G -stretch 0 1 1 0 -push WG -fm 5.0 -thresh 0 3 1 0 -o test_wm_pad.nii.gz '
+                f'{ws.fn_upsample_wm_seg} -thresh 1 1 1 0 -smooth 0.2mm -reslice-identity -thresh 0.5 inf 1 0 -popas WG '
+                f'-push G -stretch 0 1 1 0 -push WG -fm 5.0 -thresh 0 3 1 0 '
                 f'-push G -stretch 0 1 1 0 -times -as W -push G -fm 20.0 -thresh 0 5 1 0 -push W -times '
                 f'-o {tmppref}_wm_upsample_shift_pad_trim.nii.gz -as img_up_wm')
 
@@ -224,6 +265,7 @@ def import_ashs_t2(ashs:ASHSFolder, template:Template, output_dir, id, device):
 
     # Read the upsampling options
     upsample_opts = template.json['preprocessing']['t2_param']
+    nnunet_opts = template.json['preprocessing']['nnunet_wm']
 
     # Initialize the output folder (use namespace format)
     for subdir in ['','/tmp','/nnunet/input','/nnunet/output']:
@@ -244,7 +286,7 @@ def import_ashs_t2(ashs:ASHSFolder, template:Template, output_dir, id, device):
 
     # Vote between posteriors based on category labels
     img_dggm_seg, _ = ashs_posteriors_to_tissue_labels(ashs.posteriors, cl_new, ['bg','gm','dg'], 'bg')
-    ### sitk.WriteImage(img_dggm_seg, fn_upsample_input)
+    sitk.WriteImage(img_dggm_seg, ws.fn_upsample_input)
 
     # The first step is to upsample the ASHS T2 segmentation using the deep learning
     # upsampling model. This will increase the z-resolution of the segmentation
@@ -255,18 +297,10 @@ def import_ashs_t2(ashs:ASHSFolder, template:Template, output_dir, id, device):
         t2_seg = ws.fn_upsample_input, 
         id = id)
 
-    ### upsample_net.do_apply_single(upsample_args)
+    upsample_net.do_apply_single(upsample_args)
 
-    # Next we need to generate the white matter segmentation. For this, we need the
-    # whole-brain T1-weighted MRI. 
-    c3d = Convert3D()
-    c3d.execute(f'{ashs.mprage} -as T1 {ashs.final_seg} -thresh 1 inf 1 0 -int 0 '
-                f'-reslice-matrix {ashs.affine_t2_to_t1} -trim 5mm '
-                f'-push T1 -reslice-identity -o {ws.fn_nnunet_input}')
-
-    # Perform white matter segmentation    
-    # nnunet_model = f'{template.root}/nnunet/{upsample_opts["nnunet_wm"]["model"]}'
-    # nnunet_wm_inference(template, nnunet_model, ws, device)
+    # Add the white matter label
+    add_wm_segmentation(ashs, template, nnunet_opts, ws, device)
 
     # Next, we need to propagate the original ASHS labels into the upsampled segmentations
     # and extend the white matter over the alveus

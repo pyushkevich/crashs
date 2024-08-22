@@ -16,12 +16,13 @@ import SimpleITK as sitk
 import tempfile
 from picsl_c3d import Convert3D
 from picsl_greedy import LMShoot3D
+from picsl_cmrep import cmrep_vskel, mesh_tetra_sample
 from util import *
 from vtkutil import *
 from lddmm import *
 from omt import *
 from preprocess_t2 import import_ashs_t2
-
+from roi_integrate import integrate_over_rois
 
 # Routine to convert ASHS posterior probabilities to CRUISE inputs
 def ashs_output_to_cruise_input(template:Template, ashs: ASHSFolder, workspace: Workspace):
@@ -741,6 +742,33 @@ def subject_to_template_fit_omt_keops(template:Template, workspace: Workspace, d
         json.dump(dist_stat, jsonfile)
 
 
+def compute_thickness_stats(ws: Workspace):
+
+    # Generate the levelset from which we will compute the thickness data
+    fn_gwb = ws.fn_cruise('mtl_cruise-gwb.nii.gz')
+    fn_cgb = ws.fn_cruise('mtl_cruise-cgb.nii.gz')
+    c3d = Convert3D()
+    c3d.execute(f'{fn_gwb} {fn_cgb} -scale -1 -min -info')
+    img_levelset = c3d.peek(-1)
+
+    # Extract a surface from this image
+    pd_bnd = extract_zero_levelset(img_levelset)
+    vtk_apply_sform(pd_bnd, get_image_sform(img_levelset))
+    save_vtk(pd_bnd, ws.thick_boundary)
+
+    # Apply a bit of smoothing to the mesh
+    vs, fs = taubin_smooth(vtk_get_points(pd_bnd), vtk_get_triangles(pd_bnd), 0.5, -0.51, 40)
+    pd_bnd_smooth = vtk_make_pd(vs, fs)
+    save_vtk(pd_bnd_smooth, ws.thick_boundary_sm)
+
+    # Compute the skeleton
+    cmrep_vskel(f'-e 2 -c 1 -p 1.6 -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
+
+    # Sample the thickness from the tetrahedra onto the template grid
+    mesh_tetra_sample(f'-d 1.0 -D SamplingDistance {ws.fit_omt_match_to_hw} '
+                      f'{ws.thick_tetra_mesh} {ws.thick_result} VoronoiRadius')
+
+
 if __name__ == '__main__':
 
     # Create a parser
@@ -774,6 +802,7 @@ if __name__ == '__main__':
     parse.add_argument('--skip-omt', action='store_true',
                        help='Skip the optimal transport matching step')
     parse.add_argument('--skip-cruise', action='store_true')
+    parse.add_argument('--skip-preproc', action='store_true')
 
     args = parse.parse_args()
 
@@ -801,12 +830,13 @@ if __name__ == '__main__':
 
     # Determine if the current template requires additional postprocessing steps
     # to convert the ASHS output into an input suitable for CRASHS
-    if template.get_preprocessing_mode() == 't2_alveus':
-        fn_preproc = f'{args.output_dir}/preprocess/t2_alveus'
-        print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
-        upsampled_posterior_pattern = import_ashs_t2(ashs, template, fn_preproc, expid, device)
-        ashs.set_alternate_posteriors(upsampled_posterior_pattern)
-        ashs.load_posteriors(template)
+    if args.skip_preproc is False:
+        if template.get_preprocessing_mode() == 't2_alveus':
+            fn_preproc = f'{args.output_dir}/preprocess/t2_alveus'
+            print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
+            upsampled_posterior_pattern = import_ashs_t2(ashs, template, fn_preproc, expid, device)
+            ashs.set_alternate_posteriors(upsampled_posterior_pattern)
+            ashs.load_posteriors(template)
 
     # Perform the import and CRUISE steps
     if args.skip_cruise is False:
@@ -835,4 +865,7 @@ if __name__ == '__main__':
         # Perform the OMT matching
         print("Matching template to subject using OMT")
         subject_to_template_fit_omt_keops(template, workspace, device)
+
+    # Compute thickness statistics
+    compute_thickness_stats(workspace)
 
