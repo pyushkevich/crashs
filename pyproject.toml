@@ -9,6 +9,21 @@ authors = [
   { name="Paul Yushkevich", email="pyushkevich@gmail.com" },
 ]
 description = "CRASHS: Cortical Reconstruction for Automated Segmentation of Hippocampal Subfields (ASHS)"
+dependencies = [
+  'numpy',
+  'torch',
+  'pykeops',
+  'pymeshlab',
+  'vtk',
+  'SimpleITK',
+  'geomloss',
+  'statsmodels',
+  'monai',
+  'picsl_c3d',
+  'picsl_greedy',
+  'picsl_cmrep',
+  'nnunetv2
+]
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
