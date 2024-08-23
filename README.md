@@ -32,6 +32,13 @@ Once `nighres` is installed, you can install CRASHS:
 pip install crashs
 ```
 
+Or, if you want to run the latest development code:
+
+```sh
+git clone https://github.com/pyushkevich/crashs
+cd crashs
+pip install .
+```
 
 ## Docker
 This repository includes the CRASHS scripts and a `Dockerfile`. The official container on DockerHub is labeled `pyushkevich/crashs:latest`
