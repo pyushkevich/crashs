@@ -22,7 +22,7 @@ dependencies = [
   'picsl_c3d',
   'picsl_greedy',
   'picsl_cmrep',
-  'nnunetv2
+  'nnunetv2'
 ]
 readme = "README.md"
 requires-python = ">=3.8"
