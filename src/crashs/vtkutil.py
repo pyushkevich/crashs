@@ -26,6 +26,14 @@ class PyMeshLabInterface:
         else:
             ms.simplification_quadric_edge_collapse_decimation(**kwargs)
 
+    @staticmethod
+    def apply_coord_taubin_smoothing(ms:pymeshlab.MeshSet, **kwargs):
+        if hasattr(pymeshlab.MeshSet, 'apply_coord_taubin_smoothing') and callable(getattr(pymeshlab.MeshSet, 'apply_coord_taubin_smoothing')):
+            ms.apply_coord_taubin_smoothing(**kwargs)
+        else:
+            ms.taubin_smooth(**kwargs)
+
+
 
 # Read VTK mesh
 def load_vtk(filename):
@@ -253,7 +261,7 @@ def taubin_smooth(v, f, lam, mu, steps):
     ms.add_mesh(m)
 
     # Perform Taubin smoothing
-    ms.apply_coord_taubin_smoothing(lambda_ = lam, mu = mu, stepsmoothnum = steps)
+    PyMeshLabInterface.apply_coord_taubin_smoothing(ms, lambda_ = lam, mu = mu, stepsmoothnum = steps)
 
     # Create a new pd with the vertices and vaces
     m0 = ms.mesh(0)
