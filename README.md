@@ -6,7 +6,7 @@ The main input to the package is the ASHS-T1 output folder. ASHS should be run u
 
 ## Outputs
 The program generates many outputs, but the most useful ones are:
-* `fitting/[ID]_fitted_omt_hw_target.vtk`: the grey/white and grey/csf boundaries estimated by the `cruise_cortex_extraction` module of NighRes. These meshes are in physical (RAS) coordinate space, not in voxel (IJK) space output by Nighres. *If you extract meshes from the T1-ASHS segmentation in ITK-SNAP, those should like up with these meshes.*
+* `fitting/[ID]_fitted_omt_hw_target.vtk`: the grey/white and grey/csf boundaries estimated by the `cruise_cortex_extraction` module of NighRes. These meshes are in physical (RAS) coordinate space, not in voxel (IJK) space output by Nighres. *If you extract meshes from the T1-ASHS segmentation in ITK-SNAP, those should line up with these meshes.*
 
 * `fitting/[ID]_fitted_omt_hw_target.vtk`: the mid-surface of the gray matter estimated by the `volumetric_layering` module of NighRes. Also in RAS space.
 
@@ -20,17 +20,33 @@ The following files can be used to check how well the fitting between the inflat
 
 * `fitting/[ID]_fitted_dist_stat.json`: distance statistics of the fitting, including average, max, and 95th percentile of the distance. Useful to check for poor fitting results.
 
+* `thickness/[ID]_template_thickness.vtk`: a mesh with same geometry as the template that has a point array `VoronoiRadius` containing half-thickness of the gray matter at each vertex.
+
+## Installation: pip
+
+CRASHS requires the `nighres` package, which cannot be installed with `pip`. To install `nighres`, please follow the [installation instructions](https://nighres.readthedocs.io/en/latest/). To our knowledge, ARM64 architecture is currently not supported.
+
+Once `nighres` is installed, you can install CRASHS:
+
+```sh
+pip install crashs
+```
+
 
 ## Docker
 This repository includes the CRASHS scripts and a `Dockerfile`. The official container on DockerHub is labeled `pyushkevich/crashs:latest`
 
-    docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
-    ./crashs.py --help
-    
+```sh
+docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
+python3 -m crashs --help
+```
+
 A sample dataset is also provided and can be processed as follows (also see `run_sample.sh`)
 
-    docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
-    ./crashs.py -s right -r 0.1 sample_data/035_S_4082_2011-06-28 templates/crashs_template_01 /data/test
+```sh
+docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
+python3 -m crashs -s right -r 0.1 sample_data/035_S_4082_2011-06-28 templates/crashs_template_01 /data/test
+```
 
 ## Citation
 * PA Yushkevich, L Xie, LEM Wisse, M Dong, S Ravikumar, R Ittyerah,  R de Flores, SR Das, DA Wolk for the Alzheimer’s Disease Neuroimaging Initiative (ADNI), Mapping Medial Temporal Lobe Longitudinal Change in Preclinical Alzheimer’s Disease, 2023 Alzheimer's Association International Conference (AAIC 2023).
