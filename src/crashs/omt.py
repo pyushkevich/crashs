@@ -5,7 +5,7 @@ import time
 import geomloss
 import SimpleITK as sitk
 from torch.autograd import grad
-from vtkutil import *
+from crashs.vtkutil import *
 
 # Now we need to initialize the labeling of the sphere. We can try directly to use OMT to 
 # match the sphere to each of the meshes and maybe that's going to be good enough for getting

@@ -4,8 +4,8 @@ from statsmodels.stats.weightstats import DescrStatsW
 import pandas as pd
 import argparse
 
-from vtkutil import *
-from util import Template
+from crashs.vtkutil import *
+from crashs.util import Template
 
 def integrate_over_rois(args):
 

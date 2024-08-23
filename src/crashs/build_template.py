@@ -8,12 +8,12 @@ import time
 import matplotlib.pyplot as plt
 from scipy.special import softmax
 from sklearn.decomposition import PCA
-from vtkutil import *
-from lddmm import *
-from omt import *
-from util import MeshData, Template, ASHSFolder, Workspace
-from crashs import ashs_output_to_cruise_input, run_cruise, cruise_postproc
-from crashs import omt_match_fitted_template_to_target
+from crashs.vtkutil import *
+from crashs.lddmm import *
+from crashs.omt import *
+from crashs.util import MeshData, Template, ASHSFolder, Workspace
+from crashs.crashs import ashs_output_to_cruise_input, run_cruise, cruise_postproc
+from crashs.crashs import omt_match_fitted_template_to_target
 
 # Workspace for building the template
 class TemplateBuildWorkspace:

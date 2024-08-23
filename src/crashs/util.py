@@ -6,7 +6,7 @@ import os
 import glob
 import json
 
-from vtkutil import *
+from crashs.vtkutil import *
 
 # Class that represents a surface mesh for use in PyTorch
 class MeshData:

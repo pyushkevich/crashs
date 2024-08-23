@@ -1,2 +1,2 @@
-from crashs import crashs_main
+from crashs.crashs import crashs_main
 crashs_main()

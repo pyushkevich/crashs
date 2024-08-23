@@ -4,8 +4,8 @@ import numpy as np
 import argparse
 from picsl_c3d import Convert3D
 from picsl_greedy import Greedy3D
-import upsample.upsample_net as upsample_net
-from util import ASHSFolder, Template, ashs_posteriors_to_tissue_labels
+import crashs.upsample.upsample_net as upsample_net
+from crashs.util import ASHSFolder, Template, ashs_posteriors_to_tissue_labels
 import os
 import torch
 

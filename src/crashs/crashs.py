@@ -17,12 +17,11 @@ import tempfile
 from picsl_c3d import Convert3D
 from picsl_greedy import LMShoot3D
 from picsl_cmrep import cmrep_vskel, mesh_tetra_sample
-from util import *
-from vtkutil import *
-from lddmm import *
-from omt import *
-from preprocess_t2 import import_ashs_t2
-from roi_integrate import integrate_over_rois
+from crashs.util import *
+from crashs.vtkutil import *
+from crashs.lddmm import *
+from crashs.omt import *
+from crashs.preprocess_t2 import import_ashs_t2
 
 # Routine to convert ASHS posterior probabilities to CRUISE inputs
 def ashs_output_to_cruise_input(template:Template, ashs: ASHSFolder, workspace: Workspace):
@@ -769,7 +768,7 @@ def compute_thickness_stats(ws: Workspace):
                       f'{ws.thick_tetra_mesh} {ws.thick_result} VoronoiRadius')
 
 
-if __name__ == '__main__':
+def crashs_main():
 
     # Create a parser
     parse = argparse.ArgumentParser(description="ASHS-T1 Surface-Based Analysis based on CRUISE")
@@ -869,3 +868,5 @@ if __name__ == '__main__':
     # Compute thickness statistics
     compute_thickness_stats(workspace)
 
+if __name__ == '__main__':
+    crashs_main()

@@ -9,4 +9,5 @@ statsmodels
 monai
 picsl_c3d
 picsl_greedy
+picsl_cmrep
 nnunetv2
