@@ -19,9 +19,9 @@ dependencies = [
   'geomloss',
   'statsmodels',
   'monai',
-  'picsl_c3d',
-  'picsl_greedy',
-  'picsl_cmrep',
+  'picsl_c3d>=1.4.2.1',
+  'picsl_greedy>=0.0.5',
+  'picsl_cmrep>=1.0.2.0',
   'nnunetv2'
 ]
 readme = "README.md"
