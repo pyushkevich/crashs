@@ -356,7 +356,7 @@ def do_test(args):
 
     # Instantiate and load the model
     mynet = UpsampleNet(patch_size[0], upsample_factor[0]).to(device)
-    mynet.load_state_dict(torch.load(os.path.join(args.train, 'model.dat')))
+    mynet.load_state_dict(torch.load(os.path.join(args.train, 'model.dat'), weights_only=True))
     mynet.eval()
 
     # Create the sliding window inference object
@@ -414,7 +414,7 @@ def do_apply_single(args):
 
     # Instantiate and load the model
     mynet = UpsampleNet(patch_size[0], upsample_factor[0]).to(device)
-    mynet.load_state_dict(torch.load(os.path.join(args.train, 'model.dat'), device))
+    mynet.load_state_dict(torch.load(os.path.join(args.train, 'model.dat'), device, weights_only=True))
     mynet.eval()
 
     # Create the sliding window inference object

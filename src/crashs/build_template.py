@@ -636,79 +636,86 @@ def groupwise_lddmm(tbs: TemplateBuildWorkspace, template: Template, device, sta
         plt.savefig(os.path.join(tbs.qa_dir(), 'loss_by_stage.png'))
 """
 
-if __name__ == '__main__':
 
-    # Create a parser
-    parse = argparse.ArgumentParser(description="CRASHS template building script")
-    parse.add_argument('template_init_dir', help='Template initial directory structure', type=pathlib.Path)
-    parse.add_argument('ashs_json', help='JSON file desribing the input files', type=argparse.FileType('rt'))
-    parse.add_argument('work_dir', metavar='work_dir', type=str, help='Working directory')
-    parse.add_argument('output_dir', metavar='output_dir', type=str, help='Template output directory')
-    parse.add_argument('-f', '--fusion-stage', type=str, choices=['multiatlas', 'bootstrap'], 
-                    help='Which stage of ASHS fusion to select', default='bootstrap')                   
-    parse.add_argument('-c', '--correction-mode', type=str, choices=['heur', 'corr_usegray', 'corr_nogray'], 
-                    help='Which ASHS correction output to select', default='corr_usegray')                   
-    parse.add_argument('-d', '--device', type=str, 
-                    help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
-    parse.add_argument('--skip-cruise', action='store_true')
-    parse.add_argument('--skip-affine', action='store_true')
-    args = parse.parse_args()
+class BuildTemplateLauncher:
 
-    # Load the template
-    template = Template(args.template_init_dir)
+    def __init__(self, parse):
 
-    # Load the ASHS json
-    ashs_input_desc = json.load(args.ashs_json)
+        # Add the arguments
+        parse.add_argument('template_init_dir', help='Template initial directory structure', type=pathlib.Path)
+        parse.add_argument('ashs_json', help='JSON file desribing the input files', type=argparse.FileType('rt'))
+        parse.add_argument('work_dir', metavar='work_dir', type=str, help='Working directory')
+        parse.add_argument('output_dir', metavar='output_dir', type=str, help='Template output directory')
+        parse.add_argument('-f', '--fusion-stage', type=str, choices=['multiatlas', 'bootstrap'], 
+                        help='Which stage of ASHS fusion to select', default='bootstrap')                   
+        parse.add_argument('-c', '--correction-mode', type=str, choices=['heur', 'corr_usegray', 'corr_nogray'], 
+                        help='Which ASHS correction output to select', default='corr_usegray')                   
+        parse.add_argument('-d', '--device', type=str, 
+                        help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
+        parse.add_argument('--skip-cruise', action='store_true')
+        parse.add_argument('--skip-affine', action='store_true')
 
-    # Prepare device
-    # device = torch.device(args.device) if torch.cuda.is_available() else 'cpu'
-    device = torch.device(torch.cuda.current_device() if torch.cuda.is_available() else 'cpu')
-    print("Is cuda available?", torch.cuda.is_available())
-    print("Device count?", torch.cuda.device_count())
-    print("Current device?", torch.cuda.current_device())
-    print("Device name? ", torch.cuda.get_device_name(torch.cuda.current_device()))
+        # Set the function to run
+        parse.set_defaults(func = lambda args : self.run(args))
 
-    # Keep track of ASHS importers and workspaces created
-    tbs = TemplateBuildWorkspace(args.work_dir)
+    
+    def run(self, args):
 
-    # Run basic Nighres for each subject
-    for d in ashs_input_desc:
-        id = d['id']
-        side = d['side']
+        # Load the template
+        template = Template(args.template_init_dir)
 
-        # Create the output dir
-        out_dir = os.path.join(args.work_dir, id)
-        os.makedirs(out_dir, exist_ok=True)
-        workspace = Workspace(out_dir, id, side)
+        # Load the ASHS json
+        ashs_input_desc = json.load(args.ashs_json)
 
-        # Run the CRUISE part
-        if not args.skip_cruise:
+        # Prepare device
+        # device = torch.device(args.device) if torch.cuda.is_available() else 'cpu'
+        device = torch.device(torch.cuda.current_device() if torch.cuda.is_available() else 'cpu')
+        print("Is cuda available?", torch.cuda.is_available())
+        print("Device count?", torch.cuda.device_count())
+        print("Current device?", torch.cuda.current_device())
+        print("Device name? ", torch.cuda.get_device_name(torch.cuda.current_device()))
 
-            # Load the ASHS experiment
-            ashs = ASHSFolder(d['path'], side, args.fusion_stage, args.correction_mode)
-            ashs.load_posteriors(template)
+        # Keep track of ASHS importers and workspaces created
+        tbs = TemplateBuildWorkspace(args.work_dir)
 
-            # Convert the inputs into probability maps
-            print("Converting ASHS-T1 posteriors to CRUISE inputs")
-            ashs_output_to_cruise_input(template, ashs, workspace)
+        # Run basic Nighres for each subject
+        for d in ashs_input_desc:
+            id = d['id']
+            side = d['side']
 
-            # Run CRUISE on the inputs
-            print("Running CRUISE to correct topology and compute inflated surface")
-            run_cruise(workspace, template, overwrite=True)
+            # Create the output dir
+            out_dir = os.path.join(args.work_dir, id)
+            os.makedirs(out_dir, exist_ok=True)
+            workspace = Workspace(out_dir, id, side)
 
-            # Perform postprocessing
-            print("Mapping ASHS labels on the inflated template")
-            cruise_postproc(template, ashs, workspace, 
-                            reduction=template.get_cruise_inflate_reduction())
+            # Run the CRUISE part
+            if not args.skip_cruise:
 
-        # Store the data
-        tbs.add_subject(id, workspace, side)
+                # Load the ASHS experiment
+                ashs = ASHSFolder(d['path'], side, args.fusion_stage, args.correction_mode)
+                ashs.load_posteriors(template)
 
-    # The LDDMM portion
-    if not args.skip_affine:
-        groupwise_similarity_registration_keops(tbs, template, device=device)
+                # Convert the inputs into probability maps
+                print("Converting ASHS-T1 posteriors to CRUISE inputs")
+                ashs_output_to_cruise_input(template, ashs, workspace)
 
-    # Run the groupwise code
-    template_from_ellipsoid_keops(tbs, template, device)
-    generate_template_output_folder(tbs, template, args.output_dir  )
-    finalize_groupwise_keops(tbs, template, device=device)
+                # Run CRUISE on the inputs
+                print("Running CRUISE to correct topology and compute inflated surface")
+                run_cruise(workspace, template, overwrite=True)
+
+                # Perform postprocessing
+                print("Mapping ASHS labels on the inflated template")
+                cruise_postproc(template, ashs, workspace, 
+                                reduction=template.get_cruise_inflate_reduction())
+
+            # Store the data
+            tbs.add_subject(id, workspace, side)
+
+        # The LDDMM portion
+        if not args.skip_affine:
+            groupwise_similarity_registration_keops(tbs, template, device=device)
+
+        # Run the groupwise code
+        template_from_ellipsoid_keops(tbs, template, device)
+        generate_template_output_folder(tbs, template, args.output_dir  )
+        finalize_groupwise_keops(tbs, template, device=device)

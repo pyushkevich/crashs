@@ -45,15 +45,33 @@ class MeshData:
         save_vtk(pd_reduced, fn)
 
 
+# CRASHS main data folder - contains templates and trained models for fitting, preprocessing
+class CrashsDataRoot : 
+
+    def __init__(self, user_path=None):
+        self.path = os.environ.get('CRASHS_DATA','') if user_path is None else user_path
+
+    def find_template(self, template_id):
+        for x in self.path.split(os.pathsep):
+            json_path = os.path.join(x,'templates',template_id,'template.json')
+            if os.path.exists(json_path):
+                return os.path.join(x,'templates',template_id)
+        raise FileNotFoundError(f'Template {template_id} not found, set search path using -C or CRASHS_DATA')
+    
+    def find_model(self, model_id):
+        for x in self.path.split(os.pathsep):
+            json_path = os.path.join(x, 'models', model_id, 'config.json')
+            if os.path.exists(json_path):
+                return os.path.join(x, 'models', model_id)
+        raise FileNotFoundError(f'Model {model_id} not found, set search path using -C or CRASHS_DATA')
+
+
 # Class that represents information about a template
 class Template :
     def __init__(self, template_dir):
-        # Store the template directory
         self.root = template_dir
-
-        # Load the template json
         with open(os.path.join(template_dir, 'template.json')) as template_json:
-            self.json = json.load(template_json)
+            self.json = json.load(template_json)            
 
     def get_mesh(self, side):
         return os.path.join(self.root, self.json['sides'][side]['mesh'])
@@ -106,17 +124,33 @@ class Template :
     def get_preprocessing_mode(self):
         return self.json.get('preprocessing', dict()).get('mode', None)
 
+    def get_white_matter_nnunet_model(self):
+        return self.json.get('preprocessing', dict()).get('nnunet_wm', None)
 
-def find_unique_file_with_suffix(dir, suffix):
+
+def find_unique_file_with_suffix(dir, suffix, missing='e'):
     if os.path.isdir(dir):
         matches = [ f for f in os.listdir(dir) if f.endswith(suffix) ]
         if len(matches) == 1:
             return os.path.join(dir, matches[0])
-    return None
+    if missing == 'q':
+        return None
+    elif missing == 'w':
+        print(f'Warning: no file ending with {suffix} found in {dir}')
+    else:
+        raise FileNotFoundError(f'No file ending with {suffix} found in {dir}')
+    
 
-
-def find_file(fullpath):
-    return fullpath if os.path.exists(fullpath) else None
+# Find file with optional error reporting
+def find_file(fullpath, missing='e'):
+    if os.path.exists(fullpath):
+        return fullpath
+    elif missing == 'q':
+        return None
+    elif missing == 'w':
+        print(f'Warning: file {fullpath} not found')
+    else:
+        raise FileNotFoundError(f'File {fullpath} not found')
 
         
 # Class to represent an ASHS output folder and the files that we need from
@@ -133,24 +167,22 @@ class ASHSFolder:
         # How posteriors are coded
         pstr = 'posterior' if correction_mode == 'heur' else f'posterior_{correction_mode}'
 
-        # Set the posterior pattern
-        self.posterior_pattern = os.path.join(
-            ashs_dir, 
-            f'{fusion_mode}/fusion/{pstr}_{side}_%03d.nii.gz')
-        
+        # Locate the posteriors
+        self.posterior_pattern = os.path.join(ashs_dir, f'{fusion_mode}/fusion/{pstr}_{side}_%03d.nii.gz')
+                
         # Find the MPRAGE
-        self.mprage = find_file(f'{ashs_dir}/mprage.nii.gz')
+        self.mprage = find_file(f'{ashs_dir}/mprage.nii.gz','w')
         
         # Find the final segmentation if the posteriors are not available
-        self.final_seg = find_unique_file_with_suffix(f'{ashs_dir}/final', f'_{side}_lfseg_{correction_mode}.nii.gz')
+        self.final_seg = find_unique_file_with_suffix(f'{ashs_dir}/final', f'_{side}_lfseg_{correction_mode}.nii.gz','w')
 
         # Find the TSE native chunk image
-        self.tse_native_chunk = find_unique_file_with_suffix(f'{ashs_dir}', f'tse_native_chunk_{side}.nii.gz')
+        self.tse_native_chunk = find_file(f'{ashs_dir}/tse_native_chunk_{side}.nii.gz','w')
 
         # Required matrix files
-        self.affine_to_template = find_file(f'{ashs_dir}/affine_t1_to_template/t1_to_template_affine.mat')
-        self.affine_t2f_t1m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1.mat')
-        self.affine_t1f_t2m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1_inv.mat')
+        self.affine_to_template = find_file(f'{ashs_dir}/affine_t1_to_template/t1_to_template_affine.mat','e')
+        self.affine_t2f_t1m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1.mat','w')
+        self.affine_t1f_t2m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1_inv.mat','w')
 
     def set_alternate_posteriors(self, pattern):
         self.posterior_pattern = pattern
@@ -167,12 +199,16 @@ class ASHSFolder:
 
         # If the posteriors do not exist, load them from final segmentation instead
         if len(self.posteriors) == 0:
+            if self.tse_native_chunk is None or self.final_seg is None:
+                raise FileNotFoundError('No posteriors or final segmentation found in ASHS folder')
             c3d = Convert3D()
             c3d.execute(f'{self.tse_native_chunk} {self.final_seg} -int 0 -reslice-identity -popas X')
             for lab in ['wm', 'gm', 'bg']:
                 for v in template.get_labels_for_tissue_class(lab):
                     c3d.execute(f'-push X -thresh {v} {v} 1 0')
-                    self.posteriors[v] = c3d.pop()
+                    post = c3d.pop()
+                    if np.count_nonzero(sitk.GetArrayFromImage(post)) > 0:
+                        self.posteriors[v] = post
 
     
 class Workspace:
@@ -251,50 +287,88 @@ class Workspace:
 # Routine that takes ASHS posteriors and combines them into a tissue probability map
 def ashs_posteriors_to_tissue_probabilities(
         ashs_posteriors: dict, category_labels: dict, 
-        category_order: list, background_category, 
-        softmax_scale=10):
+        category_order: list, background_category, softmax_scale = 0):
     
-    # Load the posteriors and compute maximum probability per voxel
-    idat = {}
-    for lab in category_order:
-        idat[lab] = {}
-        prob_max=None
-        for v in category_labels[lab]:
+    # Add up the posteriors corresponding to the different tissue labels
+    p_cat = {}
+    img_ref = None
+    for cat in category_order:
+        p_cat[cat] = None
+        for v in category_labels[cat]:
             img_itk = ashs_posteriors.get(v, None)
             if img_itk:
+                img_ref = img_itk
                 img_arr = sitk.GetArrayFromImage(img_itk)
-                if prob_max is None:
-                    prob_max = img_arr
-                    idat[lab]['itk'] = img_itk
-                else:
-                    prob_max = np.maximum(prob_max, img_arr)
+                p_cat[cat] = img_arr if p_cat[cat] is None else p_cat[cat] + img_arr
 
-        idat[lab]['prob_max'] = prob_max
+    # Normalize the posteriors so that the max total probability is one. Notably the posteriors
+    # output by JLF can be negative and here we clip them to the zero/one range. Finally, we
+    # optionally apply softmax
+    x = np.concatenate([p_cat[cat][:, :, :, np.newaxis] for cat in category_order], axis=3)
+    p_max = np.max(np.sum(x, 3))
+    x = np.clip(x, 0, p_max) / p_max;
 
-    # Create a single numpy array combining the probabilities
+    # Allocate the missing probability to the background 
     bix = category_order.index(background_category)
-    x = np.concatenate(
-        [idat[lab]['prob_max'][:, :, :, np.newaxis] for lab in category_order], 
-        axis=3)
+    x[:,:,:,bix] += 1 - x.sum(axis=3)
 
-    # Replace missing data with background probability
-    x[:,:,:,bix] = np.where(x.max(axis=3) == 0., 1.0, x[:,:,:,bix])
+    # Finally optional softmax
+    if softmax_scale > 0:
+        x = scipy.special.softmax(x * softmax_scale, 3)
 
-    # Compute the softmax
-    y = scipy.special.softmax(x * softmax_scale, axis=3)
+    # Generate an ITK vector image of the tissue class probabilities
+    img_cat = sitk.GetImageFromArray(x, True)
+    img_cat.CopyInformation(img_ref)
 
     # Return the results
-    return idat, y
+    return img_cat
 
 
 # Routine that takes ASHS posteriors and combines them into a tissue label image
 def ashs_posteriors_to_tissue_labels(
         ashs_posteriors: dict, category_labels: dict, 
-        category_order: list, background_category, 
-        softmax_scale=10):
-    idat, prob = ashs_posteriors_to_tissue_probabilities(
+        category_order: list, background_category, softmax_scale = 0):
+    img_cat = ashs_posteriors_to_tissue_probabilities(
         ashs_posteriors, category_labels, category_order, background_category, softmax_scale)    
-    tseg = sitk.GetImageFromArray(np.argmax(prob,3))
-    tseg.CopyInformation(idat[background_category]['itk'])
+    tseg = sitk.GetImageFromArray(np.argmax(img_cat,3))
+    tseg.CopyInformation(img_cat)
     lab_to_idx = { lab:i for (i, lab) in enumerate(category_order) }
     return tseg, lab_to_idx
+
+
+# Routine that takes ASHS posteriors and combines them into a segmentation image
+def ashs_posteriors_to_segmentation(ashs_posteriors: dict):
+    c3d = Convert3D()
+    reps = []
+    for i, (label, p) in enumerate(ashs_posteriors.items()):
+        if p is not None:
+            c3d.push(p)
+            reps.append(f'{i} {label}')
+    print(" ".join(reps))
+    c3d.execute(f'-vote -dup -lstat -pop -replace {" ".join(reps)} -dup -lstat -pop')
+    return c3d.peek(-1)
+
+
+# This routine takes per-label posteriors and a tissue class posterior and recomputes
+# the per-label posteriors so that they add up to the tissue class posterior. This is
+# done using fast marching
+def reassign_label_posteriors_to_new_tissue_posterior(
+        ashs_posteriors: dict, tissue_posterior: sitk.Image, labels: list):
+    
+    # Vote among the posteriors in this tissue class 
+    c3d = Convert3D()
+    c3d.add_image('TP', tissue_posterior)
+    used_labels = []
+    for label in labels:
+        if label in ashs_posteriors:
+            c3d.push(ashs_posteriors[label])
+            used_labels.append(label)
+    c3d.execute('-vote')
+
+    # Now split the voting result and fast march for each label over the tissue prob
+    c3d.execute(f'-split -foreach-comp {len(used_labels)} -push TP -info -thresh 0.5 inf 1 0 -times '
+                f'-insert TP 1 -fast-marching 20 -reciprocal -endfor '
+                f'-foreach -scale 10 -endfor -softmax -foreach -push TP -times -info -endfor')
+    
+    # Generate the updated posteriors
+    return { l : c3d.peek(i) for (i, l) in enumerate(used_labels) }

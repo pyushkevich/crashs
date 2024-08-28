@@ -5,32 +5,37 @@ import argparse
 from picsl_c3d import Convert3D
 from picsl_greedy import Greedy3D
 import crashs.upsample.upsample_net as upsample_net
-from crashs.util import ASHSFolder, Template, ashs_posteriors_to_tissue_labels
+from crashs.util import *
 import os
 import torch
+import json
 
 
-# Inputs and outputs for the postprocessing task
-class PreprocessT2Workspace:
-
+# Common inputs and outputs for the postprocessing task
+class PreprocessWorkspace:
     def __init__(self, output_dir, id):
         self.output_dir = output_dir
         self.id = id
-        self.fn_upsample_input = f'{output_dir}/{id}_chunk_gm_dg_seg.nii.gz'
-        self.fn_upsample_output = f'{output_dir}/{id}_ivseg_unet_upsample.nii.gz'
-        self.fn_upsample_output_bin = f'{output_dir}/{id}_ivseg_unet_upsample_bin.nii.gz'
         self.fn_nnunet_input = f'{output_dir}/nnunet/input/MTL_000_0000.nii.gz'
         self.fn_nnunet_output = f'{output_dir}/nnunet/output/MTL_000.nii.gz'
         self.fn_upsample_wm_seg = f'{output_dir}/{id}_upsample_wmseg.nii.gz'
         self.dir_new_posteriors = f'{output_dir}/posteriors'
 
 
-def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessT2Workspace, device):
+# Inputs and outputs for the T2 postprocessing task
+class PreprocessT2Workspace(PreprocessWorkspace):
+    def __init__(self, output_dir, id):
+        PreprocessWorkspace.__init__(self, output_dir, id)
+        self.fn_upsample_input = f'{output_dir}/{id}_chunk_gm_dg_seg.nii.gz'
+        self.fn_upsample_output = f'{output_dir}/{id}_ivseg_unet_upsample.nii.gz'
+        self.fn_upsample_output_bin = f'{output_dir}/{id}_ivseg_unet_upsample_bin.nii.gz'
+
+
+def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessWorkspace, device):
 
     from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
-    from batchgenerators.utilities.file_and_folder_operations import load_json, join, isfile, maybe_mkdir_p, isdir, subdirs, \
-    save_json
-    from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
+    from batchgenerators.utilities.file_and_folder_operations import load_json, join
+    from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
     from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
     from nnunetv2.utilities.label_handling.label_handling import determine_num_input_channels
 
@@ -80,10 +85,14 @@ def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessT2Workspa
         overwrite=True, num_processes_preprocessing=1, num_processes_segmentation_export=1)
     
 
-def add_wm_segmentation(
-        ashs:ASHSFolder, template:Template, nnunet_opts:dict,  ws: PreprocessT2Workspace, device):
+def add_wm_segmentation_to_ashs_t2(
+        ashs:ASHSFolder, template:Template, nnunet_model:str,  ws: PreprocessWorkspace, device):
     
     # Read the nnunet options from the preprocessing options
+    with open(os.path.join(nnunet_model, 'config.json')) as config_json:
+        nnunet_opts = json.load(config_json)
+
+    # Read the options that affect upsampling
     target_orientation = np.array(nnunet_opts["target_orientation"])
     target_spacing = np.array(nnunet_opts["target_spacing"])
 
@@ -107,9 +116,9 @@ def add_wm_segmentation(
     print(f'Upsampling T1 ROI by {upsample_vec} using Non-Local Means')
     c3d.execute(f'-nlm-denoise -nlm-upsample {upsample_vec} -o {ws.fn_nnunet_input}')
 
-    # Perform white matter segmentation    
-    nnunet_model = f'{template.root}/nnunet/{nnunet_opts["model"]}'
-    nnunet_wm_inference(template, nnunet_model, ws, device)
+    # Perform white matter segmentation 
+    nnunet_inner_model = os.path.join(nnunet_model, nnunet_opts['model'])
+    nnunet_wm_inference(template, nnunet_inner_model, ws, device)
 
     # Transform the white matter segmentation into T1 space
     tmppref = f'{ws.output_dir}/tmp/{ws.id}'
@@ -120,7 +129,7 @@ def add_wm_segmentation(
               f'-r {ashs.affine_t2f_t1m}')
     
 
-def postprocess_upsample(
+def postprocess_t2_upsample(
         ashs:ASHSFolder, template:Template, upsample_opts:dict,  ws: PreprocessT2Workspace):
     
     # Map labels to categories CA, SUB+ERC and Cortex
@@ -171,7 +180,6 @@ def postprocess_upsample(
     # Reslice the WM segmentation into an upsampled T2 segmentation space and clean up,
     # getting rid of WM pixels that are too far from any GM, as well as any CSF stuck 
     # between GM and WM
-    # TODO: shoudn't we use the T1->T2 matrix here?
     thresh_level = 0.5
     c3d.execute(f'-clear -push img_up_gm -thresh {thresh_level} inf 1 0 -as G '
                 f'{ws.fn_upsample_wm_seg} -thresh 1 1 1 0 -smooth 0.2mm -reslice-identity -thresh 0.5 inf 1 0 -popas WG '
@@ -261,11 +269,129 @@ def postprocess_upsample(
     return upsampled_posterior_pattern
 
 
-def import_ashs_t2(ashs:ASHSFolder, template:Template, output_dir, id, device):
+def postprocess_t1_wm(
+        ashs:ASHSFolder, template:Template, upsample_opts:dict, ws: PreprocessT2Workspace):
+    
+    # Prefix for where to write temporary outouts
+    tmppref = f'{ws.output_dir}/tmp/{ws.id}'
 
-    # Read the upsampling options
-    upsample_opts = template.json['preprocessing']['t2_param']
-    nnunet_opts = template.json['preprocessing']['nnunet_wm']
+    # TODO: It would be nice to add the strip of WM between hippocampus and MTL cortex as we do
+    # for the T2 ASHS post-processing, but it is not clear how to do this because there are places
+    # where MTL and hippocampus label are supposed to be adjacent in T1 ASHS. This stems from 
+    # there not being a separate subiculum label in T1 ASHS. It may be possible to do something
+    # based on the ranging of ERC but seems very complex.
+
+    # Convert ASHS posteriors into background and GM posteriors
+    tissue_cat = ['gm', 'bg']
+    tissue_cat_labels = { k: template.get_labels_for_tissue_class(k) for k in tissue_cat }
+    img_cat = ashs_posteriors_to_tissue_probabilities(ashs.posteriors, tissue_cat_labels, tissue_cat, 'bg')
+
+    # Incorporate the WM segmentation into the ASHS segmentation space and clean up,
+    # getting rid of WM pixels that are too far from any GM, as well as any CSF stuck 
+    # between GM and WM
+    thresh_level = 0.5
+    c3d = Convert3D()
+    c3d.add_image('img_prob_gm', sitk.VectorIndexSelectionCast(img_cat, 0))
+    c3d.execute(f'-push img_prob_gm -o {tmppref}_prob_gm.nii.gz '
+                f'{ws.fn_upsample_wm_seg} -thresh 1 1 1 0 -smooth 0.2mm -reslice-identity -thresh 0.5 inf 1 0 -popas WG '
+                f'-push img_prob_gm -stretch 0 1 1 0 -push WG -fm 5.0 -thresh 0 5 1 0 '
+                f'-push img_prob_gm -stretch 0 1 1 0 -times -as W -push img_prob_gm -fm 20.0 -thresh 0 5 1 0 -push W -times '
+                f'-o {tmppref}_csf_pseudo_wm_prob.nii.gz -as img_pseudo_wm_prob')
+
+    # Generate the new GM, WM, and CSF probability images
+    c3d.execute(f'-clear -push img_prob_gm -dup -stretch 0 1 1 0 -popas PNG '
+                f'-push img_pseudo_wm_prob -push PNG -times -as img_prob_wm -o {tmppref}_prob_wm.nii.gz '
+                f'-push PNG -push W -stretch 0 1 1 0 -times -as img_prob_csf -o {tmppref}_prob_csf.nii.gz ')
+    
+    # Generate the updated posteriors for the background labels
+    post_bg = reassign_label_posteriors_to_new_tissue_posterior(
+        ashs.posteriors, c3d.peek(-1), tissue_cat_labels['bg'])
+    
+    # The gray matter posteriors stay the same
+    post_gm = reassign_label_posteriors_to_new_tissue_posterior(
+        ashs.posteriors, c3d.peek(-3), tissue_cat_labels['gm'])
+
+    # The white matter posterior is what we generated
+    post_wm = { template.get_labels_for_tissue_class('wm')[0] : c3d.peek(-2) }
+
+    # All the posteriors together
+    post_new = { **post_bg, **post_gm, **post_wm }
+    
+    # Generate the post-processed posteriors
+    os.makedirs(f'{ws.dir_new_posteriors}', exist_ok=True)
+    upsampled_posterior_pattern = f'{ws.dir_new_posteriors}/preproc_posterior_%03d.nii.gz'
+    for label, post in post_new.items():
+        sitk.WriteImage(post, upsampled_posterior_pattern % (label,))
+
+    # Compute a segmentation from the posteriors
+    seg_new = ashs_posteriors_to_segmentation(post_new)
+    sitk.WriteImage(seg_new, f'{tmppref}_ashs_with_wm.nii.gz')
+
+    return upsampled_posterior_pattern
+
+    # We need to generate a new segmentation image with the white matter, i.e., we take the posteriors 
+    # but take into account that some voxels are now given the WM label
+    c3d.execute('-clear')
+    label_order = []
+    for label, posterior in ashs.posteriors.items():
+        if label not in template.get_labels_for_tissue_class('wm'):
+            c3d.push(posterior)
+            label_order.append(label)
+    label_order.append(template.get_labels_for_tissue_class('wm')[0])
+    c3d.execute(f'-push img_prob_wm -vote -o {tmppref}_seg_with_wm.nii.gz ')
+    return
+
+    c3d.execute(f'-info -vote -popas S -push img_prob_wm -push S -int 0 -reslice-identity '
+                f'-push img_prob_wm -thresh 0.5 inf 255 0 -max -split -info')
+
+    # Ok, now we have a segmentation on the stack where we have all the bg/csf labels 
+    # in consecutive order and a white matter label as 255. We just want to 
+    # 
+    # 
+    # We want to propagate each
+    # of these images through the corresponding tissue probability map
+    for label, posterior in ashs.posteriors.items():
+        if label not in template.get_labels_for_tissue_class('wm'):
+            cat_match = [ k for k in ['cortex','suberc','hipp'] if label in upsample_opts[f'{k}_labels'] ]
+            cat = cat_match[0] if len(cat_match) > 0 else 'bg'
+            pmap = 'img_prob_csf' if cat in ['bg','dg'] else 'img_prob_gm'
+            c3d.execute(f'-push {pmap}')
+    c3d.execute(f'-push img_prob_wm')
+    
+    # Compute softmax and an updated segmentation
+    c3d.execute(f'-foreach-comp {len(label_order)} -as P -thresh 0.5 inf 1 0 -times -insert P 1 '
+                f'-fast-marching 20 -reciprocal -endfor -foreach -scale 10 -endfor -softmax -info')
+    
+    # We can now output the new posteriors for CRASHS to use.
+    upsampled_posterior_pattern = f'{ws.dir_new_posteriors}/preproc_posterior_%03d.nii.gz'
+    for i, label in enumerate(label_order):
+        sitk.WriteImage(c3d.peek(i), upsampled_posterior_pattern % (label,))
+
+    # Also combine the posteriors into a segmentation 
+    reps = ' '.join([ f'{i} {label}' for i, label in enumerate(label_order)])
+    c3d.execute(f'-vote -replace {reps} -o {tmppref}_ivseg_ashs_upsample.nii.gz')
+    
+    # Finally, output the new posteriors
+    return upsampled_posterior_pattern
+
+
+def upsample_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, preproc_opts: dict, ws: PreprocessT2Workspace):
+    
+    # Locate the upsampling model
+    upsample_args = argparse.Namespace(
+        train = cdr.find_model(preproc_opts['upsample_model']),
+        output = ws.output_dir,
+        t2_roi = ashs.tse_native_chunk,
+        t2_seg = ws.fn_upsample_input, 
+        id = ws.id)
+
+    upsample_net.do_apply_single(upsample_args)
+
+
+def import_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device):
+
+    # Read the preprocessing/upsampling options
+    preproc_opts = template.json['preprocessing']['param']
 
     # Initialize the output folder (use namespace format)
     for subdir in ['','/tmp','/nnunet/input','/nnunet/output']:
@@ -276,7 +402,7 @@ def import_ashs_t2(ashs:ASHSFolder, template:Template, output_dir, id, device):
 
     # Before upsampling, we need to create an image with two labels, 1 for the gray
     # matter excluding dentate, and 2 for the dentate. 
-    lab_dg = upsample_opts["dg_labels"]
+    lab_dg = preproc_opts["dg_labels"]
     cl_old = { cat: template.get_labels_for_tissue_class(cat) for cat in ['bg','gm','wm'] }
     cl_new = {
         'bg': [ l for l in cl_old['bg'] + cl_old['wm'] if l not in lab_dg ],
@@ -290,21 +416,56 @@ def import_ashs_t2(ashs:ASHSFolder, template:Template, output_dir, id, device):
 
     # The first step is to upsample the ASHS T2 segmentation using the deep learning
     # upsampling model. This will increase the z-resolution of the segmentation
-    upsample_args = argparse.Namespace(
-        train = f'{template.root}/upsample_net',
-        output = output_dir,
-        t2_roi = ashs.tse_native_chunk,
-        t2_seg = ws.fn_upsample_input, 
-        id = id)
-
-    upsample_net.do_apply_single(upsample_args)
+    upsample_t2(cdr, ashs, preproc_opts, ws)
 
     # Add the white matter label
-    add_wm_segmentation(ashs, template, nnunet_opts, ws, device)
+    nnunet_model = cdr.find_model(template.get_white_matter_nnunet_model())
+    add_wm_segmentation_to_ashs_t2(ashs, template, nnunet_model, ws, device)
 
     # Next, we need to propagate the original ASHS labels into the upsampled segmentations
     # and extend the white matter over the alveus
-    upsampled_posterior_pattern = postprocess_upsample(ashs, template, upsample_opts, ws)
+    upsampled_posterior_pattern = postprocess_t2_upsample(ashs, template, preproc_opts, ws)
     return upsampled_posterior_pattern
     
 
+def add_wm_to_ashs_t1(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device):
+
+    # Read the preprocessing/upsampling options
+    preproc_opts = template.json['preprocessing']['param']
+    
+    # Initialize the output folder (use namespace format)
+    for subdir in ['','/tmp','/nnunet/input','/nnunet/output']:
+        os.makedirs(f'{output_dir}{subdir}', exist_ok=True)
+
+    # Relevant filenames
+    ws = PreprocessWorkspace(output_dir, id)
+
+    # Locate the NNUnet model
+    nnunet_model = cdr.find_model(template.get_white_matter_nnunet_model())
+
+    # Read the nnunet options from the preprocessing options
+    with open(os.path.join(nnunet_model, 'config.json')) as config_json:
+        nnunet_opts = json.load(config_json)
+
+    # Read the options that affect upsampling
+    target_orientation = np.array(nnunet_opts["target_orientation"])
+    target_spacing = np.array(nnunet_opts["target_spacing"])
+
+    # We simply copy the T1-ASHS "tse" image (which is an upsampled T1-MRI) 
+    # as the nnU-Net input.
+    # TODO: we maybe should check if for some reason the input has not been upsampled
+    # and if so, upsample it to match what NNUnet expects
+    c3d = Convert3D()
+    c3d.execute(f'{ashs.tse_native_chunk} -swapdim {target_orientation} -o {ws.fn_nnunet_input}')
+
+    # Perform white matter segmentation 
+    nnunet_inner_model = os.path.join(nnunet_model, nnunet_opts['model'])
+    # nnunet_wm_inference(template, nnunet_inner_model, ws, device)
+
+    # Copy the nnUnet output as our WM result
+    c3d.execute(f'{ws.fn_nnunet_output} -o {ws.fn_upsample_wm_seg}')
+
+    # Next, we need to propagate the original ASHS labels into the upsampled segmentations
+    # and extend the white matter over the alveus
+    upsampled_posterior_pattern = postprocess_t1_wm(ashs, template, preproc_opts, ws)
+    return upsampled_posterior_pattern

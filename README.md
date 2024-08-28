@@ -45,14 +45,14 @@ This repository includes the CRASHS scripts and a `Dockerfile`. The official con
 
 ```sh
 docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
-python3 -m crashs --help
+python3 -m crashs fit --help
 ```
 
 A sample dataset is also provided and can be processed as follows (also see `run_sample.sh`)
 
 ```sh
 docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
-python3 -m crashs -s right -r 0.1 sample_data/035_S_4082_2011-06-28 templates/crashs_template_01 /data/test
+python3 -m crashs fit -s right -r 0.1 sample_data/035_S_4082_2011-06-28 templates/crashs_template_01 /data/test
 ```
 
 ## Citation
