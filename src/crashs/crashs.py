@@ -204,12 +204,10 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace, re
     x_infl = x_infl @ M[:3,:3].T + M[:3,3:].T 
     vtk_set_points(pd_infl, x_infl)
     save_vtk(pd_infl, workspace.affine_moving)
-    print('Here!!!')
 
     # Downsample the inflated mesh. Since the inflated mesh is smooth, it should be
     # perfectly safe to downsample it by a large amount (say 10x), and still use it
     # as a target for varifold matching. 
-    test = pymeshlab.Mesh(vtk_get_points(pd_infl), vtk_get_triangles(pd_infl))
     md_aff_reduced = MeshData(pd_infl, 'cpu', target_faces=reduction)
     md_aff_reduced.export(workspace.affine_moving_reduced)
 

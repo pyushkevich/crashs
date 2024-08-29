@@ -3,6 +3,8 @@ from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
 import pymeshlab
 import numpy as np
 import SimpleITK as sitk
+import tempfile
+import os
 
 # We need to create some aliases for pymeshlab functions and classes because of the
 # changing API and issues with compatibility on older systems
@@ -33,7 +35,23 @@ class PyMeshLabInterface:
         else:
             ms.taubin_smooth(**kwargs)
 
+    @staticmethod
+    def add_mesh_to_meshset(ms:pymeshlab.MeshSet, v, f):
+        # TODO: there is a bug with pymeshlab (https://github.com/cnr-isti-vclab/PyMeshLab/issues/392) where
+        # calling the Mesh constructor results in a segfault. This is an inefficient workaround
+        pd = vtk_make_pd(v, f)
+        handle, fn = tempfile.mkstemp(suffix='mesh.obj')
+        os.close(handle)
 
+        w = vtk.vtkOBJWriter()
+        w.SetFileName(fn)
+        w.SetInputData(pd)
+        w.Update()
+
+        # m = pymeshlab.Mesh(vertex_matrix=v, 
+        #                   face_matrix=f)
+        ms.load_new_mesh(fn)
+        os.remove(fn)
 
 # Read VTK mesh
 def load_vtk(filename):
@@ -231,12 +249,9 @@ def vtk_apply_sform(pd, sform,
 # Reduction using pymeshlab
 def decimate(v, f, target_faces):
 
-    # Create a pymeshlab mesh and add all the arrays to it
-    m = pymeshlab.Mesh(vertex_matrix=v, face_matrix=f)
-
-    # Create a mesh set
+    # Create a mesh set with the input mesh
     ms = pymeshlab.MeshSet()
-    ms.add_mesh(m)
+    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
 
     # Perform decimation
     tf = int(target_faces * f.shape[0]) if target_faces < 1.0 else int(target_faces)
@@ -253,12 +268,10 @@ def decimate(v, f, target_faces):
 
 # Taubin smoothing using MeshLab
 def taubin_smooth(v, f, lam, mu, steps):
-    # Create a pymeshlab mesh and add all the arrays to it
-    m = pymeshlab.Mesh(vertex_matrix=v, face_matrix=f)
-
-    # Create a mesh set
+    
+    # Create a pymeshlab mesh and add all the arrays to it    
     ms = pymeshlab.MeshSet()
-    ms.add_mesh(m)
+    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
 
     # Perform Taubin smoothing
     PyMeshLabInterface.apply_coord_taubin_smoothing(ms, lambda_ = lam, mu = mu, stepsmoothnum = steps)
@@ -353,7 +366,8 @@ def extract_zero_levelset(img_levelset, edge_len_pct=1.0, to_ras=True):
 
     # Apply remeshing to the template
     ms = pymeshlab.MeshSet()
-    ms.add_mesh(pymeshlab.Mesh(vertex_matrix=vtk_get_points(pd_cubes), face_matrix=vtk_get_triangles(pd_cubes)))
+    ms = pymeshlab.MeshSet()
+    PyMeshLabInterface.add_mesh_to_meshset(ms, vtk_get_points(pd_cubes), vtk_get_triangles(pd_cubes))
     PyMeshLabInterface.meshing_isotropic_explicit_remeshing(
         ms, targetlen = PyMeshLabInterface.percentage(edge_len_pct))
     v_remesh, f_remesh = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
