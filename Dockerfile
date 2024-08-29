@@ -39,6 +39,9 @@ RUN ./build.sh && \
 # CRASHS install
 # ================================================
 
+# Install the bigger dependencies for faster builds
+RUN python3 -m pip install numpy torch pykeops monai nnunetv2 
+
 # Copy the contents
 COPY . /tk/crashs
 WORKDIR /tk/crashs
