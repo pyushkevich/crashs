@@ -5,12 +5,9 @@ import pandas as pd
 import argparse
 
 from crashs.vtkutil import *
-from crashs.util import Template
+from crashs.util import CrashsDataRoot, Template
 
-def integrate_over_rois(args):
-
-    # Read the CRASHS template
-    template = Template(args.template_dir)
+def integrate_over_rois(template:Template, args):
 
     # Read the mesh, vertices and faces
     mesh = load_vtk(args.mesh)
@@ -53,21 +50,32 @@ def integrate_over_rois(args):
     df.to_csv(args.output, index=False)
 
 
-if __name__ == '__main__':
+# The program launcher
+class ROILauncher:
 
-    # Parse arguments
-    parser = argparse.ArgumentParser(description="CRASHS utility: integrate feature over ROIs in a mesh")
-    parser.add_argument('-t','--template-dir', type=str, required=True, help='Path to the CRASHS template directory')
-    parser.add_argument('--subject', help='Subject ID to include in the output CSV', default=None)
-    parser.add_argument('--session', help='Session ID to include in the output CSV', default=None)
-    parser.add_argument('--scan', help='Scan ID to include in the output CSV', default=None)
-    parser.add_argument('--side', help='Side (left/right)', required=True)
-    parser.add_argument('-a', '--array', help='Name of the array(s) to integrate', required=True, nargs='+')
-    parser.add_argument('-m', '--mesh', help='Mesh in which to perform integration', required=True)
-    parser.add_argument('-o', '--output', help='Output CSV file with the statistics', required=True)
-    args = parser.parse_args()
+    def __init__(self, parser):
+        
+        # Parse arguments
+        parser.add_argument('-C', '--crashs-data', metavar='dir', type=str,
+                            help='Path of the CRASHS data folder, if CRASHS_DATA not set')
+        parser.add_argument('-t','--template', type=str, required=True, 
+                            help='Name of the CRASHS template (folder in $CRASHS_DATA/templates)')
+        parser.add_argument('--subject', help='Optional subject ID to include in the output CSV', default=None)
+        parser.add_argument('--session', help='Optional session ID to include in the output CSV', default=None)
+        parser.add_argument('--scan', help='Optional scan ID to include in the output CSV', default=None)
+        parser.add_argument('--side', help='Optional side (left/right) to include in the output CSV', required=True)
+        parser.add_argument('-a', '--array', help='Name of the array(s) to integrate', required=True, nargs='+')
+        parser.add_argument('-m', '--mesh', help='Mesh in which to perform integration', required=True)
+        parser.add_argument('-o', '--output', help='Output CSV file with the statistics', required=True)
 
-    # Run command
-    integrate_over_rois(args)
+        # The function to run
+        parser.set_defaults(func = lambda args : self.run(args))
 
+
+    def run(self, args):
+
+        # Read the CRASHS template
+        cdr = CrashsDataRoot(args.crashs_data)
+        template = Template(cdr.find_template(args.template))
+        integrate_over_rois(template, args)
 

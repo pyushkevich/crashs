@@ -167,7 +167,7 @@ def postprocess_t2_upsample(
     c3d.add_image('img_up_gm', img_up_gm)
     c3d.add_image('img_up_dg', img_up_dg)
     c3d.add_image('img_hc_seg', img_hc_seg)
-    c3d.execute(f'-info -clear -push img_up_gm -info -thresh 0.7 inf 1 0 -as X -push img_hc_seg -info ' 
+    c3d.execute(f'-clear -push img_up_gm -thresh 0.7 inf 1 0 -as X -push img_hc_seg ' 
                 f'-int 0 -reslice-identity -as Y '
                 f'-thresh {lab_hc["cortex"]} {lab_hc["cortex"]} 1 0 -sdt '
                 f'-push Y -thresh {lab_hc["ca"]} {lab_hc["ca"]} 1 0 -sdt '
@@ -189,9 +189,9 @@ def postprocess_t2_upsample(
 
     # Split the gray matter probability map between CA and GM labels - get two probability maps
     c3d.execute(f'-clear -push img_hc_seg -replace {lab_hc["suberc"]} {lab_hc["cortex"]} '
-                f'-replace 0 255 -dup -lstat -pop -split '
+                f'-replace 0 255 -split '
                 f'-foreach -insert img_up_gm 1 -int 0 -reslice-identity -insert img_up_gm 1 -fm 5.0 -reciprocal -endfor '
-                f'-pop -vote -dup -lstat -pop -split -foreach -push img_up_gm -times -endfor '
+                f'-pop -vote -split -foreach -push img_up_gm -times -endfor '
                 f'-omc {tmppref}_gm_mtl_ca_prob.nii.gz -popas img_up_gm_pca -popas img_up_gm_pmtl')
 
     # Compute the fast marching distance from CA1 into CSF. We start with voxels that have CA1 probability L
@@ -238,8 +238,8 @@ def postprocess_t2_upsample(
             label_order.append(label)
     label_order.append(template.get_labels_for_tissue_class('wm')[0])
 
-    c3d.execute(f'-info -vote -popas S -push img_prob_wm -push S -int 0 -reslice-identity '
-                f'-push img_prob_wm -thresh 0.5 inf 255 0 -max -split -info')
+    c3d.execute(f'-vote -popas S -push img_prob_wm -push S -int 0 -reslice-identity '
+                f'-push img_prob_wm -thresh 0.5 inf 255 0 -max -split ')
 
     # Ok, now we have a segmentation on the stack where we have all the bg/csf labels 
     # in consecutive order and a white matter label as 255. We want to propagate each
@@ -254,7 +254,7 @@ def postprocess_t2_upsample(
     
     # Compute softmax and an updated segmentation
     c3d.execute(f'-foreach-comp {len(label_order)} -as P -thresh 0.5 inf 1 0 -times -insert P 1 '
-                f'-fast-marching 20 -reciprocal -endfor -foreach -scale 10 -endfor -softmax -info')
+                f'-fast-marching 20 -reciprocal -endfor -foreach -scale 10 -endfor -softmax')
     
     # We can now output the new posteriors for CRASHS to use.
     upsampled_posterior_pattern = f'{ws.dir_new_posteriors}/preproc_posterior_%03d.nii.gz'
@@ -329,51 +329,6 @@ def postprocess_t1_wm(
 
     return upsampled_posterior_pattern
 
-    # We need to generate a new segmentation image with the white matter, i.e., we take the posteriors 
-    # but take into account that some voxels are now given the WM label
-    c3d.execute('-clear')
-    label_order = []
-    for label, posterior in ashs.posteriors.items():
-        if label not in template.get_labels_for_tissue_class('wm'):
-            c3d.push(posterior)
-            label_order.append(label)
-    label_order.append(template.get_labels_for_tissue_class('wm')[0])
-    c3d.execute(f'-push img_prob_wm -vote -o {tmppref}_seg_with_wm.nii.gz ')
-    return
-
-    c3d.execute(f'-info -vote -popas S -push img_prob_wm -push S -int 0 -reslice-identity '
-                f'-push img_prob_wm -thresh 0.5 inf 255 0 -max -split -info')
-
-    # Ok, now we have a segmentation on the stack where we have all the bg/csf labels 
-    # in consecutive order and a white matter label as 255. We just want to 
-    # 
-    # 
-    # We want to propagate each
-    # of these images through the corresponding tissue probability map
-    for label, posterior in ashs.posteriors.items():
-        if label not in template.get_labels_for_tissue_class('wm'):
-            cat_match = [ k for k in ['cortex','suberc','hipp'] if label in upsample_opts[f'{k}_labels'] ]
-            cat = cat_match[0] if len(cat_match) > 0 else 'bg'
-            pmap = 'img_prob_csf' if cat in ['bg','dg'] else 'img_prob_gm'
-            c3d.execute(f'-push {pmap}')
-    c3d.execute(f'-push img_prob_wm')
-    
-    # Compute softmax and an updated segmentation
-    c3d.execute(f'-foreach-comp {len(label_order)} -as P -thresh 0.5 inf 1 0 -times -insert P 1 '
-                f'-fast-marching 20 -reciprocal -endfor -foreach -scale 10 -endfor -softmax -info')
-    
-    # We can now output the new posteriors for CRASHS to use.
-    upsampled_posterior_pattern = f'{ws.dir_new_posteriors}/preproc_posterior_%03d.nii.gz'
-    for i, label in enumerate(label_order):
-        sitk.WriteImage(c3d.peek(i), upsampled_posterior_pattern % (label,))
-
-    # Also combine the posteriors into a segmentation 
-    reps = ' '.join([ f'{i} {label}' for i, label in enumerate(label_order)])
-    c3d.execute(f'-vote -replace {reps} -o {tmppref}_ivseg_ashs_upsample.nii.gz')
-    
-    # Finally, output the new posteriors
-    return upsampled_posterior_pattern
-
 
 def upsample_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, preproc_opts: dict, ws: PreprocessT2Workspace):
     
@@ -391,7 +346,7 @@ def upsample_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, preproc_opts: dict, ws: Pr
 def import_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device):
 
     # Read the preprocessing/upsampling options
-    preproc_opts = template.json['preprocessing']['param']
+    preproc_opts = template.json['preprocessing']['t2_alveus_param']
 
     # Initialize the output folder (use namespace format)
     for subdir in ['','/tmp','/nnunet/input','/nnunet/output']:
@@ -431,7 +386,7 @@ def import_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, outp
 def add_wm_to_ashs_t1(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device):
 
     # Read the preprocessing/upsampling options
-    preproc_opts = template.json['preprocessing']['param']
+    preproc_opts = template.json['preprocessing']['t1_add_wm_param']
     
     # Initialize the output folder (use namespace format)
     for subdir in ['','/tmp','/nnunet/input','/nnunet/output']:

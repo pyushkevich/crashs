@@ -18,7 +18,7 @@ def to_measure(points, triangles):
 
     # Locations and weights of our Dirac atoms:
     X = (A + B + C) / 3  # centers of the faces
-    S = torch.sqrt(torch.sum(torch.cross(B - A, C - A) ** 2, dim=1)) / 2  # areas of the faces
+    S = torch.sqrt(torch.sum(torch.linalg.cross(B - A, C - A) ** 2, dim=1)) / 2  # areas of the faces
 
     # We return a (normalized) vector of weights + a "list" of points
     return S / torch.sum(S), X

@@ -1,6 +1,7 @@
 import argparse
 from crashs.crashs import FitLauncher
 from crashs.build_template import BuildTemplateLauncher
+from crashs.roi_integrate import ROILauncher
 
 # Create a parser
 parse = argparse.ArgumentParser(
@@ -15,6 +16,9 @@ c_fit = FitLauncher(
 
 c_build = BuildTemplateLauncher(
     sub.add_parser('build', help='Build new CRASHS template'))
+
+c_roi = ROILauncher(
+    sub.add_parser('roi', help='Integrate features over ROIs in a mesh'))
 
 # Parse the arguments
 args = parse.parse_args()

@@ -1,0 +1,35 @@
+{
+    "sides": {
+        "left": {
+            "mesh": "template_shoot_left.vtk"
+        }, 
+        "right": {
+            "mesh": "template_shoot_right.vtk"
+        }
+    },
+    "registration": {
+        "varifold_sigma": 5.0,
+        "lddmm_sigma": 5.0,
+        "lddmm_gamma": 0.05,
+        "lddmm_nt": 10,
+        "jacobian_penalty": 10.0,
+        "lddmm_maxiter": 150,
+        "affine_maxiter": 50
+    },
+    "cruise": {
+        "inflate_maxiter": 1000,
+        "inflate_reduction": 0.1,
+        "laminar_n_layers": 10,
+        "laminar_method": "distance-preserving"
+    },
+    "template_build": {
+        "schedule": [
+            10,
+            10,
+            10,
+            50
+        ],
+        "remeshing_edge_length_pct": 1.0,
+        "root_sigma_factor": 2.4
+    }
+}

@@ -22,6 +22,7 @@ from crashs.vtkutil import *
 from crashs.lddmm import *
 from crashs.omt import *
 from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1
+from crashs.roi_integrate import integrate_over_rois
 
 # Routine to convert ASHS posterior probabilities to CRUISE inputs
 def ashs_output_to_cruise_input(template:Template, ashs: ASHSFolder, workspace: Workspace):
@@ -300,8 +301,6 @@ def similarity_registration_lmshoot(md_temp, md_subj, fn_output, n_iter=50, sigm
 
     # Run lmshoot to match to template
     lm = LMShoot3D()
-    print(f'lmshoot -m {fn_subj} {fn_temp} -o {fn_output} '
-           f'-G -a V -S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
     lm.fit(f'-m {fn_subj} {fn_temp} -o {fn_output} '
            f'-G -a V -S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
 
@@ -375,16 +374,11 @@ def lddmm_fit_subject_jac_penalty_lmshoot(md_temp_full, md_temp, md_subj,
 
     # Create a command to do registration
     lm = LMShoot3D()
-    print(f'-m {fn_temp} {fn_subj} -o {fn_momenta} '
-          f'-s {sigma_lddmm} -l 1 -g {gamma_lddmm} -J {w_jac_penalty} -R -n {nt} -a V '
-          f'-S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
     lm.fit(f'-m {fn_temp} {fn_subj} -o {fn_momenta} '
            f'-s {sigma_lddmm} -l 1 -g {gamma_lddmm} -J {w_jac_penalty} -R -n {nt} -a V '
            f'-S {sigma_varifold} -i {n_iter} 0 -t 1 -L plab')
 
     # Run lmtowarp to apply the transformation to the full template
-    print(f'-m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
-          f'-M {fn_temp_full} {fn_warped}')
     lm.apply(f'-m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
              f'-M {fn_temp_full} {fn_warped}')
 
@@ -448,11 +442,15 @@ def lddmm_fit_subject_jac_penalty_keops(md_temp, md_subj, n_iter=50, nt=10,
 
 # LDDMM registration between the template and the individual inflated mesh
 def subject_to_template_registration(template:Template, workspace: Workspace, device, 
-                                     use_keops = None, reduction = None, lddmm_iter = 50):
+                                     use_keops = None, reduction = None, lddmm_iter = None):
     
     # Determine whether to use keops if not specified
     if use_keops is None:
         use_keops = device.type == 'cuda'
+
+    # Determine the number of iterations for affine and deformable
+    affine_iter = template.get_affine_maxiter()
+    lddmm_iter = lddmm_iter if lddmm_iter is not None else template.get_lddmm_maxiter()
 
     # Load the template and put on the device
     fn_template_mesh = template.get_mesh(workspace.side)
@@ -474,7 +472,7 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
 
     if use_keops:
         _, affine_mat = similarity_registration_keops(
-            md_template_ds, md_subject_ds, n_iter=50, sigma_varifold=template.get_varifold_sigma())
+            md_template_ds, md_subject_ds, n_iter=affine_iter, sigma_varifold=template.get_varifold_sigma())
             
         # Save the registration parameters
         np.savetxt(workspace.affine_matrix, affine_mat)
@@ -482,7 +480,7 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
     else:
         affine_mat = similarity_registration_lmshoot(
             md_template_ds, md_subject_ds, workspace.affine_matrix, 
-            n_iter=50, sigma_varifold=template.get_varifold_sigma())
+            n_iter=affine_iter, sigma_varifold=template.get_varifold_sigma())
     
     # Apply the affine registration parameters to the two meshes
     md_subject.apply_transform(affine_mat)
@@ -711,13 +709,13 @@ def subject_to_template_fit_omt_keops(template:Template, workspace: Workspace, d
         json.dump(dist_stat, jsonfile)
 
 
-def compute_thickness_stats(ws: Workspace):
+def compute_thickness_stats(template: Template, ws: Workspace):
 
     # Generate the levelset from which we will compute the thickness data
     fn_gwb = ws.fn_cruise('mtl_cruise-gwb.nii.gz')
     fn_cgb = ws.fn_cruise('mtl_cruise-cgb.nii.gz')
     c3d = Convert3D()
-    c3d.execute(f'{fn_gwb} {fn_cgb} -scale -1 -min -info')
+    c3d.execute(f'{fn_gwb} {fn_cgb} -scale -1 -min')
     img_levelset = c3d.peek(-1)
 
     # Extract a surface from this image
@@ -734,8 +732,13 @@ def compute_thickness_stats(ws: Workspace):
     cmrep_vskel(f'-e 2 -c 1 -p 1.6 -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
 
     # Sample the thickness from the tetrahedra onto the template grid
-    mesh_tetra_sample(f'-d 1.0 -D SamplingDistance {ws.fit_omt_match_to_hw} '
+    mesh_tetra_sample(f'-d 1.0 -B -D SamplingDistance {ws.fit_omt_match_to_hw} '
                       f'{ws.thick_tetra_mesh} {ws.thick_result} VoronoiRadius')
+    
+    # Compute thickness summary measures
+    integrate_over_rois(template, argparse.Namespace(
+        subject=ws.expid, session=None, scan=None, side=ws.side,
+        array=['VoronoiRadius'], mesh=ws.thick_result, output=ws.thick_roi_summary))
 
 
 # The main program launcher
@@ -747,7 +750,7 @@ class FitLauncher:
         parse.add_argument('ashs_dir', metavar='ashs_dir', type=pathlib.Path, 
                         help='ASHS output directory')
         parse.add_argument('template', metavar='template', type=str, 
-                        help='CRASHS template to use')
+                        help='Name of the CRASHS template (folder in $CRASHS_DATA/templates)')
         parse.add_argument('output_dir', metavar='output_dir', type=str, 
                         help='Output directory to save images')
         parse.add_argument('-C', '--crashs-data', metavar='dir', type=str,
@@ -766,7 +769,7 @@ class FitLauncher:
                         help='Use KeOps routines for registration and OMT (GPU needed)')
         parse.add_argument('-r', '--reduction', type=float, 
                         help='Reduction to apply to meshes for geodesic shooting', default=None)
-        parse.add_argument('--lddmm-iter', type=int, default=50,
+        parse.add_argument('--lddmm-iter', type=int, default=None,
                         help='Number of iterations for geodesic shooting')
         parse.add_argument('--skip-reg', action='store_true',
                         help='Skip the registration step')
@@ -847,7 +850,7 @@ class FitLauncher:
             # Affine and LDDMM registration between template and subject
             print("Registering template to subject")
             subject_to_template_registration(template, workspace, device, 
-                                            use_keops=args.keops, reduction=reduction, lddmm_iter=args.lddmm_iter)
+                                             use_keops=args.keops, reduction=reduction, lddmm_iter=args.lddmm_iter)
 
         if args.skip_omt is False:
             # Perform the OMT matching
@@ -855,5 +858,5 @@ class FitLauncher:
             subject_to_template_fit_omt_keops(template, workspace, device)
 
         # Compute thickness statistics
-        compute_thickness_stats(workspace)
+        compute_thickness_stats(template, workspace)
 

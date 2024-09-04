@@ -5,6 +5,8 @@ from picsl_c3d import Convert3D
 import os
 import glob
 import json
+import pkg_resources
+import copy
 
 from crashs.vtkutil import *
 
@@ -66,12 +68,40 @@ class CrashsDataRoot :
         raise FileNotFoundError(f'Model {model_id} not found, set search path using -C or CRASHS_DATA')
 
 
+# Recursive dictionary merge
+def merge_dicts(defaults, overrides):
+    result = copy.deepcopy(defaults) 
+    for k, v in overrides.items():
+        if isinstance(v, dict):
+            if k in result:
+                if isinstance(result[k], dict):
+                    result[k] = merge_dicts(result[k], v)
+                else:
+                    raise ValueError(f'Dictionary merge failure for key {k}')
+            else:
+                result[k] = v
+        else:
+            result[k] = v
+
+    return result
+
+
 # Class that represents information about a template
 class Template :
     def __init__(self, template_dir):
         self.root = template_dir
+
+        # Load the default parameters from the json in CRASHS source tree
+        default_json_fn = pkg_resources.resource_filename('crashs', 'param/template_defaults.json')
+        print('Merged template parameters: ', default_json_fn)
+        with open(default_json_fn) as fn:
+            self.json = json.load(fn)
+
+        # Load the template-specific json
         with open(os.path.join(template_dir, 'template.json')) as template_json:
-            self.json = json.load(template_json)            
+            self.json = merge_dicts(self.json, json.load(template_json))     
+
+        print(self.json)
 
     def get_mesh(self, side):
         return os.path.join(self.root, self.json['sides'][side]['mesh'])
@@ -96,6 +126,12 @@ class Template :
 
     def get_lddmm_nt(self):
         return self.json['registration']['lddmm_nt']
+    
+    def get_lddmm_maxiter(self):
+        return self.json['registration'].get('lddmm_maxiter', 150)
+    
+    def get_affine_maxiter(self):
+        return self.json['registration'].get('affine_maxiter', 50)
     
     def get_jacobian_penalty(self):
         return self.json['registration'].get('jacobian_penalty', 0.)
@@ -266,6 +302,7 @@ class Workspace:
         self.thick_tetra_mesh = self.fn_thick('thickness_tetra.vtk')
         self.thick_skeleton = self.fn_thick('skeleton.vtk')
         self.thick_result = self.fn_thick('template_thickness.vtk')
+        self.thick_roi_summary = self.fn_thick('thickness_roi_summary.csv')
 
     def fn_fit_profile_mesh(self, k:int):
         return self.fn_fit(f'fitted_omt_match_to_p{k:02d}.vtk')
@@ -328,9 +365,10 @@ def ashs_posteriors_to_tissue_probabilities(
 def ashs_posteriors_to_tissue_labels(
         ashs_posteriors: dict, category_labels: dict, 
         category_order: list, background_category, softmax_scale = 0):
+    
     img_cat = ashs_posteriors_to_tissue_probabilities(
         ashs_posteriors, category_labels, category_order, background_category, softmax_scale)    
-    tseg = sitk.GetImageFromArray(np.argmax(img_cat,3))
+    tseg = sitk.GetImageFromArray(np.argmax(sitk.GetArrayFromImage(img_cat),3))
     tseg.CopyInformation(img_cat)
     lab_to_idx = { lab:i for (i, lab) in enumerate(category_order) }
     return tseg, lab_to_idx
@@ -345,7 +383,7 @@ def ashs_posteriors_to_segmentation(ashs_posteriors: dict):
             c3d.push(p)
             reps.append(f'{i} {label}')
     print(" ".join(reps))
-    c3d.execute(f'-vote -dup -lstat -pop -replace {" ".join(reps)} -dup -lstat -pop')
+    c3d.execute(f'-vote -replace {" ".join(reps)}')
     return c3d.peek(-1)
 
 
@@ -366,9 +404,9 @@ def reassign_label_posteriors_to_new_tissue_posterior(
     c3d.execute('-vote')
 
     # Now split the voting result and fast march for each label over the tissue prob
-    c3d.execute(f'-split -foreach-comp {len(used_labels)} -push TP -info -thresh 0.5 inf 1 0 -times '
+    c3d.execute(f'-split -foreach-comp {len(used_labels)} -push TP -thresh 0.5 inf 1 0 -times '
                 f'-insert TP 1 -fast-marching 20 -reciprocal -endfor '
-                f'-foreach -scale 10 -endfor -softmax -foreach -push TP -times -info -endfor')
+                f'-foreach -scale 10 -endfor -softmax -foreach -push TP -times -endfor')
     
     # Generate the updated posteriors
     return { l : c3d.peek(i) for (i, l) in enumerate(used_labels) }
