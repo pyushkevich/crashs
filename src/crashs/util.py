@@ -235,10 +235,16 @@ class ASHSFolder:
 
         # If the posteriors do not exist, load them from final segmentation instead
         if len(self.posteriors) == 0:
-            if self.tse_native_chunk is None or self.final_seg is None:
+            if self.final_seg is None:
                 raise FileNotFoundError('No posteriors or final segmentation found in ASHS folder')
+            
+            # Typically we want to crop the final segmentation to the final chunk but if we don't have
+            # that, then we use the image without cropping
             c3d = Convert3D()
-            c3d.execute(f'{self.tse_native_chunk} {self.final_seg} -int 0 -reslice-identity -popas X')
+            if self.tse_native_chunk is not None:
+                c3d.execute(f'{self.tse_native_chunk} {self.final_seg} -int 0 -reslice-identity -popas X')
+            else:
+                c3d.execute(f'{self.final_seg} -trim 5mm -popas X')
             for lab in ['wm', 'gm', 'bg']:
                 for v in template.get_labels_for_tissue_class(lab):
                     c3d.execute(f'-push X -thresh {v} {v} 1 0')
