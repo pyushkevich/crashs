@@ -159,6 +159,59 @@ def do_mapping(args):
     sitk.WriteImage(img_result, args.output)
 
 
+class ProfileSamplingLauncher:
+
+    def __init__(self, parse):
+
+        parse.add_argument('-c','--crashs-pattern', type=str, required=True,
+                           help='Pattern (printf-like) for input CRASHS directories')
+        parse.add_argument('-i','--image-pattern', type=str, required=True,
+                           help='Pattern (printf-like) for input images to sample')
+        parse.add_argument('-s','--subjects', type=str, required=True, nargs='+',
+                           help='IDs of subjects to sample')
+        parse.add_argument('-a','--array', type=str, required=True, 
+                           help='Name of array where to store the sampled values')
+        parse.add_argument('-m','--mesh', type=str, required=True, 
+                           help='Reference mesh to which the sampled values will be added')
+        parse.add_argument('-o','--output', type=str, required=True, 
+                           help='Output filename for the saved mesh')
+        parse.add_argument('-l','--labels', type=int, nargs='+',
+                           help='Sample specified labels from a multi-label image')
+        parse.add_argument('--label-smooth', type=float, default=0.4,
+                           help='Amount of smoothing to apply when sampling labels (mm)')
+        
+    def run(self, args):
+        do_sampling(args)
+        
+        
+class ProfileMappingLauncher:
+    
+    def __init__(self, parse):
+
+        p_map.add_argument('-c','--crashs-dir', type=str, required=True,
+                           help='CRASHS output directory for subject we want to map to')
+        p_map.add_argument('-i','--image', type=str, required=True,
+                           help='Reference image to which values should be mapped.')
+        p_map.add_argument('-s','--subject', type=str, required=True,
+                           help='IDs of CRASHS subject')
+        p_map.add_argument('-a','--array', type=str, required=True, 
+                           help='Name of array that contains data to be mapped')
+        p_map.add_argument('-t','--template', type=str, required=True, 
+                           help='Template mesh that stores the sampled values')
+        p_map.add_argument('-o','--output', type=str, required=True, 
+                           help='Output filename for the saved image')
+        p_map.add_argument('-l','--labels', action='store_true', 
+                           help='Multi-label mode (see sample command)')
+        p_map.add_argument('-k', '--rbf-kernel', type=float, default=0.4,
+                           help='Radial basis function kernel size (mm)')
+        p_map.add_argument('-T', '--target-labels', type=int, nargs='+',
+                           help='List of labels that should be replaced in the reference image. '
+                                'By default, all non-zero labels are replaced.')
+        
+    def run(self, args):
+        do_mapping(args)
+    
+
 if __name__ == '__main__':
 
     # Create a parser with subparsers f
@@ -168,45 +221,10 @@ if __name__ == '__main__':
     # Set up the parser for sampling from a collection of CRASHS directories
     p_sample = subparsers.add_parser('sample', help='Collect samples from one or more individuals')
     p_sample.set_defaults(func=do_sampling)
-    p_sample.add_argument('-c','--crashs-pattern', type=str, required=True,
-                          help='Pattern (printf-like) for input CRASHS directories')
-    p_sample.add_argument('-i','--image-pattern', type=str, required=True,
-                          help='Pattern (printf-like) for input images to sample')
-    p_sample.add_argument('-s','--subjects', type=str, required=True, nargs='+',
-                          help='IDs of subjects to sample')
-    p_sample.add_argument('-a','--array', type=str, required=True, 
-                          help='Name of array where to store the sampled values')
-    p_sample.add_argument('-m','--mesh', type=str, required=True, 
-                          help='Reference mesh to which the sampled values will be added')
-    p_sample.add_argument('-o','--output', type=str, required=True, 
-                          help='Output filename for the saved mesh')
-    p_sample.add_argument('-l','--labels', type=int, nargs='+',
-                          help='Sample specified labels from a multi-label image')
-    p_sample.add_argument('--label-smooth', type=float, default=0.4,
-                          help='Amount of smoothing to apply when sampling labels (mm)')
     
     # Set up a parser for labeling an image in subject space
     p_map = subparsers.add_parser('map', help='Map previously sampled values into subject space')
     p_map.set_defaults(func=do_mapping)
-    p_map.add_argument('-c','--crashs-dir', type=str, required=True,
-                       help='CRASHS output directory for subject we want to map to')
-    p_map.add_argument('-i','--image', type=str, required=True,
-                       help='Reference image to which values should be mapped.')
-    p_map.add_argument('-s','--subject', type=str, required=True,
-                       help='IDs of CRASHS subject')
-    p_map.add_argument('-a','--array', type=str, required=True, 
-                       help='Name of array that contains data to be mapped')
-    p_map.add_argument('-t','--template', type=str, required=True, 
-                       help='Template mesh that stores the sampled values')
-    p_map.add_argument('-o','--output', type=str, required=True, 
-                       help='Output filename for the saved image')
-    p_map.add_argument('-l','--labels', action='store_true', 
-                       help='Multi-label mode (see sample command)')
-    p_map.add_argument('-k', '--rbf-kernel', type=float, default=0.4,
-                       help='Radial basis function kernel size (mm)')
-    p_map.add_argument('-T', '--target-labels', type=int, nargs='+',
-                       help='List of labels that should be replaced in the reference image. '
-                            'By default, all non-zero labels are replaced.')
     
     args = parse.parse_args()
     args.func(args)
