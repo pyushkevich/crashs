@@ -771,12 +771,16 @@ class FitLauncher:
                         help='Reduction to apply to meshes for geodesic shooting', default=None)
         parse.add_argument('--lddmm-iter', type=int, default=None,
                         help='Number of iterations for geodesic shooting')
+        parse.add_argument('--skip-preproc', action='store_true',
+                        help='Skip the preprocessing step')
+        parse.add_argument('--skip-cruise', action='store_true',
+                        help='Skip the surface reconstruction step')
         parse.add_argument('--skip-reg', action='store_true',
                         help='Skip the registration step')
         parse.add_argument('--skip-omt', action='store_true',
                         help='Skip the optimal transport matching step')
-        parse.add_argument('--skip-cruise', action='store_true')
-        parse.add_argument('--skip-preproc', action='store_true')
+        parse.add_argument('--skip-thick', action='store_true',
+                        help='Skip the thickness computation step')
 
         # Set the function to run
         parse.set_defaults(func = lambda args : self.run(args))
@@ -858,5 +862,6 @@ class FitLauncher:
             subject_to_template_fit_omt_keops(template, workspace, device)
 
         # Compute thickness statistics
-        compute_thickness_stats(template, workspace)
+        if args.skip_thick is False:
+            compute_thickness_stats(template, workspace)
 

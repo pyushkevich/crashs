@@ -372,3 +372,10 @@ def extract_zero_levelset(img_levelset, edge_len_pct=1.0, to_ras=True):
         ms, targetlen = PyMeshLabInterface.percentage(edge_len_pct))
     v_remesh, f_remesh = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
     return vtk_make_pd(v_remesh, f_remesh)
+
+
+def isotropic_explicit_remeshing(v, f, **kwargs):
+    ms = pymeshlab.MeshSet()
+    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
+    PyMeshLabInterface.meshing_isotropic_explicit_remeshing(ms, **kwargs)
+    return ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()

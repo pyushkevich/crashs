@@ -2,6 +2,7 @@ import argparse
 from crashs.crashs import FitLauncher
 from crashs.build_template import BuildTemplateLauncher
 from crashs.roi_integrate import ROILauncher
+from crashs.profile_sampling import ProfileSamplingLauncher, ProfileMappingLauncher
 
 # Create a parser
 parse = argparse.ArgumentParser(
@@ -19,6 +20,12 @@ c_build = BuildTemplateLauncher(
 
 c_roi = ROILauncher(
     sub.add_parser('roi', help='Integrate features over ROIs in a mesh'))
+
+c_prof_sam = ProfileSamplingLauncher(
+    sub.add_parser('profile_sample', help='Sample data into template space using CRASHS profiles'))
+    
+c_prof_map = ProfileMappingLauncher(
+    sub.add_parser('profile_map', help='Map data from template to subject using CRASHS profiles'))
 
 # Parse the arguments
 args = parse.parse_args()

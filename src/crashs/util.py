@@ -151,6 +151,9 @@ class Template :
     def get_remeshing_edge_len_pct(self):
         return self.json.get('template_build', dict()).get('remeshing_edge_length_pct', 1.0)
     
+    def get_remeshing_feature_angle(self):
+        return self.json.get('template_build', dict()).get('remeshing_feature_angle', 30)
+    
     def get_build_iteration_schedule(self):
         return self.json.get('template_build', dict()).get('schedule', [10,10,10,50])
 
