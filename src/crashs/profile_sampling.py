@@ -188,23 +188,23 @@ class ProfileMappingLauncher:
     
     def __init__(self, parse):
 
-        p_map.add_argument('-c','--crashs-dir', type=str, required=True,
+        parse.add_argument('-c','--crashs-dir', type=str, required=True,
                            help='CRASHS output directory for subject we want to map to')
-        p_map.add_argument('-i','--image', type=str, required=True,
+        parse.add_argument('-i','--image', type=str, required=True,
                            help='Reference image to which values should be mapped.')
-        p_map.add_argument('-s','--subject', type=str, required=True,
+        parse.add_argument('-s','--subject', type=str, required=True,
                            help='IDs of CRASHS subject')
-        p_map.add_argument('-a','--array', type=str, required=True, 
+        parse.add_argument('-a','--array', type=str, required=True, 
                            help='Name of array that contains data to be mapped')
-        p_map.add_argument('-t','--template', type=str, required=True, 
+        parse.add_argument('-t','--template', type=str, required=True, 
                            help='Template mesh that stores the sampled values')
-        p_map.add_argument('-o','--output', type=str, required=True, 
+        parse.add_argument('-o','--output', type=str, required=True, 
                            help='Output filename for the saved image')
-        p_map.add_argument('-l','--labels', action='store_true', 
+        parse.add_argument('-l','--labels', action='store_true', 
                            help='Multi-label mode (see sample command)')
-        p_map.add_argument('-k', '--rbf-kernel', type=float, default=0.4,
+        parse.add_argument('-k', '--rbf-kernel', type=float, default=0.4,
                            help='Radial basis function kernel size (mm)')
-        p_map.add_argument('-T', '--target-labels', type=int, nargs='+',
+        parse.add_argument('-T', '--target-labels', type=int, nargs='+',
                            help='List of labels that should be replaced in the reference image. '
                                 'By default, all non-zero labels are replaced.')
         
