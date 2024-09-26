@@ -34,6 +34,13 @@ class PyMeshLabInterface:
             ms.apply_coord_taubin_smoothing(**kwargs)
         else:
             ms.taubin_smooth(**kwargs)
+            
+    @staticmethod
+    def meshing_surface_subdivision_loop(ms:pymeshlab.MeshSet, **kwargs):
+        if hasattr(pymeshlab.MeshSet, 'meshing_surface_subdivision_loop') and callable(getattr(pymeshlab.MeshSet, 'meshing_surface_subdivision_loop')):
+            ms.meshing_surface_subdivision_loop(**kwargs)
+        else:
+            ms.subdivision_surfaces_loop(**kwargs)
 
     @staticmethod
     def add_mesh_to_meshset(ms:pymeshlab.MeshSet, v, f):
@@ -379,3 +386,10 @@ def isotropic_explicit_remeshing(v, f, **kwargs):
     PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
     PyMeshLabInterface.meshing_isotropic_explicit_remeshing(ms, **kwargs)
     return ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+
+def loop_subdivision(v, f, iterations=1):
+    ms = pymeshlab.MeshSet()
+    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
+    PyMeshLabInterface.meshing_surface_subdivision_loop(ms, iterations=iterations)
+    return ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+    

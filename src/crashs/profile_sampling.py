@@ -14,7 +14,7 @@ from crashs.vtkutil import *
 def do_sampling(args):
 
     # Label map - will be allocated once we know how many meshes
-    label_map = None
+    label_map, mask_map = None, None
 
     # Load the reference mesh
     pd_ref = load_vtk(args.mesh)
@@ -35,19 +35,29 @@ def do_sampling(args):
         if len(prof) == 0 or n_prof is not None and len(prof) != n_prof:
             raise ValueError(f'Missing profiles or wrong number of profiles for case {id}')
 
+        # Load the image to sample
+        print(f'Sampling image {args.image_pattern.format(id = id)}')
+        img = sitk.ReadImage(args.image_pattern.format(id = id), outputPixelType=sitk.sitkFloat32)
+        
+        # Load the mask, if provided. If not, the mask will be the whole image
+        mask = None
+        if args.mask_pattern:
+            print(f'  reading mask from {args.mask_pattern.format(id = id)}')
+            mask = sitk.ReadImage(args.mask_pattern.format(id = id), outputPixelType=sitk.sitkFloat32)
+        
         # Set up the label map
         if label_map is None:
             n_prof = len(prof)
-            label_map = np.zeros((n_vert, n_prof, n_cases, n_labels+1))
-
-        # Load the image to sample
-        img = sitk.ReadImage(args.image_pattern.format(id = id), outputPixelType=sitk.sitkFloat32)
-        print(f'Sampling {id}')
+            label_map = np.zeros((n_vert, n_prof, n_cases, n_labels if mask else n_labels+1))
+            mask_map = np.zeros((n_vert, n_prof, n_cases, 1))
 
         # Split the segmentation into binary images
         x_img = sitk.GetArrayFromImage(img)
-        p_lab = np.stack([ x_img == l for l in args.labels])
-        p_lab = np.append(p_lab, [1 - p_lab.sum(0)], axis=0)
+        p_lab = np.stack([ x_img == l for l in args.labels]).astype(np.float32)
+        
+        # When there is no mask, add a background label for pixels that are not assigned any label
+        if not mask:
+            p_lab = np.append(p_lab, [1 - p_lab.sum(0)], axis=0)
 
         # Put it back into a vector ITK image (not very efficient)
         img_p = sitk.GetImageFromArray(p_lab.transpose(1,2,3,0), isVector=True)
@@ -56,11 +66,14 @@ def do_sampling(args):
         # Smooth the image a bit
         if args.label_smooth > 0:
             img_p = sitk.SmoothingRecursiveGaussian(img_p, args.label_smooth)
+            if mask:
+                mask = sitk.SmoothingRecursiveGaussian(mask, args.label_smooth)
 
         # Sample from each layer
         for layer in range(n_prof):
 
             # Get the sampling vertices
+            print(f'  sampling layer {ws.fn_fit_profile_mesh(layer)}')
             pd_layer = load_vtk(ws.fn_fit_profile_mesh(layer))
             v_ras = vtk_get_points(pd_layer)
 
@@ -71,19 +84,37 @@ def do_sampling(args):
             for j in range(len(v_lpi)):
                 try:
                     l = img_p.EvaluateAtPhysicalPoint(v_lpi[j,:].tolist(), sitk.sitkLinear)
+                    m = mask.EvaluateAtPhysicalPoint(v_lpi[j,:].tolist(), sitk.sitkLinear) if mask else 1.0
                     l = [ round(v, 5) for v in l ]
                     label_map[j, layer, i, :] = l
+                    mask_map[j, layer, i, :] = m
                 except:
                     pass
                 
     # Average the label map between subjects
-    label_map_consensus = np.mean(label_map, 2)
+    mask_mean = np.mean(mask_map, 2)
+    label_map_consensus = np.where(mask_mean > 0, np.mean(mask_map * label_map, 2) / mask_mean, np.nan)
 
     # Add as arrays to the target mesh
     for i in range(label_map_consensus.shape[2]):
         layer_prob = label_map_consensus[:,:,i].astype(np.float32)
         vtk_set_point_array(pd_ref, f'{args.array}_{i:03d}', layer_prob)
-
+        
+    # Add mask array
+    if args.mask_array:
+        vtk_set_point_array(pd_ref, f'{args.array}_mask', mask_mean[:,:,0].astype(np.float32))
+        
+    # If the user requested cell arrays, generate those too
+    if args.cell:
+        pd_ref = vtk_all_point_arrays_to_cell_arrays(pd_ref)
+        cell_label_map_consensus = np.stack([
+            vtk_get_cell_array(pd_ref, f'{args.array}_{i:03d}') for i in range(label_map_consensus.shape[2])  
+        ], axis=2)
+        vtk_set_cell_array(pd_ref, f'{args.array}_argmax', np.argmax(cell_label_map_consensus, axis=2).astype(np.float32))
+        
+    # Also compute the argmax (i.e., segmentation)
+    vtk_set_point_array(pd_ref, f'{args.array}_argmax', np.argmax(label_map_consensus, axis=2).astype(np.float32))
+    
     # Save the final mesh
     print(np.array(args.labels))
     vtk_set_field_data(pd_ref, f'{args.array}_labels', np.array(args.labels, dtype=np.int32))
@@ -164,21 +195,29 @@ class ProfileSamplingLauncher:
     def __init__(self, parse):
 
         parse.add_argument('-c','--crashs-pattern', type=str, required=True,
-                           help='Pattern (printf-like) for input CRASHS directories')
+                           help='Pattern for input CRASHS directories ("{id}" replaced by subject id)')
         parse.add_argument('-i','--image-pattern', type=str, required=True,
-                           help='Pattern (printf-like) for input images to sample')
+                           help='Pattern for input images to sample')
+        parse.add_argument('-M','--mask-pattern', type=str, required=False,
+                           help='Pattern of mask images to sample (optional)')        
         parse.add_argument('-s','--subjects', type=str, required=True, nargs='+',
                            help='IDs of subjects to sample')
         parse.add_argument('-a','--array', type=str, required=True, 
                            help='Name of array where to store the sampled values')
+        parse.add_argument('-A','--mask-array', type=str, required=False, 
+                           help='Name of array where to store the sampled mask values')
         parse.add_argument('-m','--mesh', type=str, required=True, 
                            help='Reference mesh to which the sampled values will be added')
         parse.add_argument('-o','--output', type=str, required=True, 
                            help='Output filename for the saved mesh')
         parse.add_argument('-l','--labels', type=int, nargs='+',
                            help='Sample specified labels from a multi-label image')
-        parse.add_argument('--label-smooth', type=float, default=0.4,
-                           help='Amount of smoothing to apply when sampling labels (mm)')
+        parse.add_argument('-S', '--label-smooth', '--smooth', type=float, default=0.4,
+                           help='Amount of smoothing to apply when sampling labels/data (mm)')
+        parse.add_argument('-C', '--cell', action='store_true', 
+                           help='Generate cell arrays in addition to the point arrays')
+        
+        parse.set_defaults(func = lambda args : self.run(args))
         
     def run(self, args):
         do_sampling(args)
@@ -207,6 +246,7 @@ class ProfileMappingLauncher:
         parse.add_argument('-T', '--target-labels', type=int, nargs='+',
                            help='List of labels that should be replaced in the reference image. '
                                 'By default, all non-zero labels are replaced.')
+        parse.set_defaults(func = lambda args : self.run(args))
         
     def run(self, args):
         do_mapping(args)

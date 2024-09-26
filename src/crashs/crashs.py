@@ -363,7 +363,7 @@ def similarity_registration_keops(md_temp, md_subj, n_iter=50, sigma_varifold=10
 
 
 def lddmm_fit_subject_jac_penalty_lmshoot(md_temp_full, md_temp, md_subj, 
-                                          fn_momenta, fn_warped,
+                                          fn_momenta, fn_warped_full, fn_warped,
                                           n_iter=50, nt=10, sigma_lddmm=5, sigma_varifold=10, 
                                           gamma_lddmm=0.1, w_jac_penalty=1.0):
     
@@ -380,7 +380,7 @@ def lddmm_fit_subject_jac_penalty_lmshoot(md_temp_full, md_temp, md_subj,
 
     # Run lmtowarp to apply the transformation to the full template
     lm.apply(f'-m {fn_momenta} -R -n {nt} -d 3 -s {sigma_lddmm} '
-             f'-M {fn_temp_full} {fn_warped}')
+             f'-M {fn_temp_full} {fn_warped_full} -M {fn_temp} {fn_warped}')
 
 
 # Fit template to subject using LDDMM and KeOps, utilizing a Jacobian penalty
@@ -462,8 +462,13 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
     # Also load the reduced mesh
     md_subject_ds = MeshData(load_vtk(workspace.affine_moving_reduced), device)
 
-    # Downsample the template for affine registration 
-    md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, reduction)
+    # Downsample the template for affine registration. Alternatively, the template may
+    # provide its own downsampled mesh for fitting, in which case that's what we will use
+    fn_template_mesh_reduced = template.get_reduced_mesh_for_lddmm(workspace.side)
+    if fn_template_mesh_reduced:
+        md_template_ds = MeshData(load_vtk(fn_template_mesh_reduced), device)
+    else:
+        md_template_ds = MeshData(vtk_clone_pd(md_template.pd), device, reduction)
 
     # Perform similarity registration
     print(f'Performing similarity and LDDMM registration')
@@ -516,7 +521,8 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
         # Perform the fitting
         lddmm_fit_subject_jac_penalty_lmshoot(
             md_template, md_template_ds, md_subject_ds, 
-            workspace.fit_lddmm_momenta, workspace.fit_lddmm_result,
+            workspace.fit_lddmm_momenta, 
+            workspace.fit_lddmm_result, workspace.fit_lddmm_result_reduced,
             n_iter=lddmm_iter, nt = nt,
             sigma_lddmm=template.get_lddmm_sigma(),
             sigma_varifold=template.get_varifold_sigma(),
@@ -729,9 +735,15 @@ def compute_thickness_stats(template: Template, ws: Workspace):
     save_vtk(pd_bnd_smooth, ws.thick_boundary_sm)
 
     # Compute the skeleton
+    print('Calling cmrep_vskel with ')
+    print(f'-e 2 -c 1 -p 1.6 -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
     cmrep_vskel(f'-e 2 -c 1 -p 1.6 -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
 
     # Sample the thickness from the tetrahedra onto the template grid
+    print('Calling mesh_tetra_sample with ')
+    print(f'-d 1.0 -B -D SamplingDistance {ws.fit_omt_match_to_hw} '
+          f'{ws.thick_tetra_mesh} {ws.thick_result} VoronoiRadius')
+    
     mesh_tetra_sample(f'-d 1.0 -B -D SamplingDistance {ws.fit_omt_match_to_hw} '
                       f'{ws.thick_tetra_mesh} {ws.thick_result} VoronoiRadius')
     

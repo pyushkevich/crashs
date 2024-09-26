@@ -105,6 +105,10 @@ class Template :
 
     def get_mesh(self, side):
         return os.path.join(self.root, self.json['sides'][side]['mesh'])
+    
+    def get_reduced_mesh_for_lddmm(self, side):
+        mesh = self.json['sides'][side].get('mesh_reduced', None)
+        return None if mesh is None else os.path.join(self.root, mesh)
 
     def get_labels_for_tissue_class(self, tissue_class):
         return self.json['ashs_label_type'][tissue_class]
@@ -301,6 +305,7 @@ class Workspace:
         self.fit_lddmm_momenta_reduced = self.fn_fit('fit_lddmm_momenta_reduced.vtk')
         self.fit_lddmm_momenta = self.fn_fit('fit_lddmm_momenta.vtk')
         self.fit_lddmm_result = self.fn_fit('fitted_lddmm_template.vtk')
+        self.fit_lddmm_result_reduced = self.fn_fit('fitted_lddmm_template_reduced.vtk')
         self.fit_omt_match = self.fn_fit('fitted_omt_match.vtk')
         self.fit_omt_hw_target = self.fn_fit('fitted_omt_hw_target.vtk')
         self.fit_omt_match_to_hw = self.fn_fit('fitted_omt_match_to_hw.vtk')
