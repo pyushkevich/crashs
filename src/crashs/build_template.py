@@ -224,7 +224,8 @@ def shoot_template_to_subject(md_temp, p, sigma_root=20):
 
 # Update the template by remeshing and updating probability labels
 def update_model_by_remeshing(md_root, md_targets, p_root, p_temp_z, 
-                              sigma_lddmm=5, sigma_root=20, targetlen=1.0):
+                              sigma_lddmm=5, sigma_root=20, 
+                              targetlen=1.0, featuredeg=30):
 
     # LDDMM kernels
     device = md_root.vt.device
@@ -246,10 +247,9 @@ def update_model_by_remeshing(md_root, md_targets, p_root, p_temp_z,
     plab_sample_avg = np.stack(plab_sample).mean(0)
 
     # Apply remeshing to the template
-    ms = pymeshlab.MeshSet()
-    ms.add_mesh(pymeshlab.Mesh(vertex_matrix=q_temp.detach().cpu().numpy(), face_matrix=md_root.f))
-    ms.meshing_isotropic_explicit_remeshing(targetlen=pymeshlab.Percentage(targetlen))
-    v_remesh, f_remesh = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+    v_remesh, f_remesh = isotropic_explicit_remeshing(
+        q_temp.detach().cpu().numpy(), md_root.f, 
+        targetlen=targetlen, featuredeg=featuredeg)
     pd_remesh = vtk_make_pd(v_remesh, f_remesh)
 
     # Apply the remeshing to the plab array
@@ -354,10 +354,10 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
 
     # Peform remeshing of the sphere
     targetlen = template.get_remeshing_edge_len_pct()
-    ms = pymeshlab.MeshSet()
-    ms.add_mesh(pymeshlab.Mesh(vertex_matrix=v_sph_opt.detach().cpu().numpy(), face_matrix=md_sph.f))
-    ms.meshing_isotropic_explicit_remeshing(targetlen=pymeshlab.Percentage(targetlen))
-    v_ell, f_ell = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+    featuredeg = template.get_remeshing_feature_angle()
+    v_ell, f_ell = isotropic_explicit_remeshing(
+        v_sph_opt.detach().cpu().numpy(), md_sph.f, 
+        targetlen=PyMeshLabInterface.percentage(targetlen), featuredeg=featuredeg)
 
     pd_ell = vtk_make_pd(v_ell, f_ell)
     pd_ell = vtk_set_cell_array(pd_ell, 'plab', np.zeros((f_ell.shape[0],1)))
@@ -407,7 +407,8 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
         # Remesh the template (use fill-resolution target meshes to sample plab)
         md_remesh = update_model_by_remeshing(
             md_root, md_aff, p_root, p_temp, 
-            sigma_lddmm=sigma_lddmm, sigma_root=sigma_root, targetlen=targetlen)
+            sigma_lddmm=sigma_lddmm, sigma_root=sigma_root, 
+            targetlen=PyMeshLabInterface.percentage(targetlen), featuredeg=featuredeg)
         save_vtk(md_remesh.pd, f'{tbs.lddmm_dir()}/template_iter{i:02d}_remesh.vtk')
 
         # Make the template the new root
@@ -683,30 +684,39 @@ class BuildTemplateLauncher:
             id = d['id']
             side = d['side']
 
-            # Create the output dir
-            out_dir = os.path.join(args.work_dir, id)
-            os.makedirs(out_dir, exist_ok=True)
-            workspace = Workspace(out_dir, id, side)
+            # There are two ways to do this. One is that the user provides the ASHS directory
+            # in 'ashs_dir' (or for back-compatibility, 'path') and then we run CRUISE on this
+            # directory and output it into the work directory. Another is that the user supplies
+            # and existing workspace for each subject where CRUISE has already been run
+            if 'crashs_dir' in d:
+                out_dir = d['crashs_dir']
+                workspace = Workspace(out_dir, id, side)
+            else:
+                # Create the output dir
+                out_dir = os.path.join(args.work_dir, id)
+                os.makedirs(out_dir, exist_ok=True)
+                workspace = Workspace(out_dir, id, side)
 
-            # Run the CRUISE part
-            if not args.skip_cruise:
+                # Run the CRUISE part
+                if not args.skip_cruise:
 
-                # Load the ASHS experiment
-                ashs = ASHSFolder(d['path'], side, args.fusion_stage, args.correction_mode)
-                ashs.load_posteriors(template)
+                    # Load the ASHS experiment
+                    ashs_dir = d['ashs_dir'] if 'ashs_dir' in d else d['path']
+                    ashs = ASHSFolder(ashs_dir, side, args.fusion_stage, args.correction_mode)
+                    ashs.load_posteriors(template)
 
-                # Convert the inputs into probability maps
-                print("Converting ASHS-T1 posteriors to CRUISE inputs")
-                ashs_output_to_cruise_input(template, ashs, workspace)
+                    # Convert the inputs into probability maps
+                    print("Converting ASHS-T1 posteriors to CRUISE inputs")
+                    ashs_output_to_cruise_input(template, ashs, workspace)
 
-                # Run CRUISE on the inputs
-                print("Running CRUISE to correct topology and compute inflated surface")
-                run_cruise(workspace, template, overwrite=True)
+                    # Run CRUISE on the inputs
+                    print("Running CRUISE to correct topology and compute inflated surface")
+                    run_cruise(workspace, template, overwrite=True)
 
-                # Perform postprocessing
-                print("Mapping ASHS labels on the inflated template")
-                cruise_postproc(template, ashs, workspace, 
-                                reduction=template.get_cruise_inflate_reduction())
+                    # Perform postprocessing
+                    print("Mapping ASHS labels on the inflated template")
+                    cruise_postproc(template, ashs, workspace, 
+                                    reduction=template.get_cruise_inflate_reduction())
 
             # Store the data
             tbs.add_subject(id, workspace, side)
