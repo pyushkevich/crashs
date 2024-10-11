@@ -130,7 +130,8 @@ def add_wm_segmentation_to_ashs_t2(
     
 
 def postprocess_t2_upsample(
-        ashs:ASHSFolder, template:Template, upsample_opts:dict,  ws: PreprocessT2Workspace):
+        ashs:ASHSFolder, template:Template, upsample_opts:dict,  ws: PreprocessT2Workspace,
+        bypass_wm = False):
     
     # Map labels to categories CA, SUB+ERC and Cortex
     all_lab = [ x for (k,v) in template.get_label_types().items() for x in v ]
@@ -424,3 +425,45 @@ def add_wm_to_ashs_t1(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, o
     # and extend the white matter over the alveus
     upsampled_posterior_pattern = postprocess_t1_wm(ashs, template, preproc_opts, ws)
     return upsampled_posterior_pattern
+
+
+def upsample_only_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device):
+
+    # Read the preprocessing/upsampling options
+    preproc_opts = template.json['preprocessing']['t2_alveus_param']
+
+    # Initialize the output folder (use namespace format)
+    for subdir in ['','/tmp']:
+        os.makedirs(f'{output_dir}{subdir}', exist_ok=True)
+
+    # Relevant filenames
+    ws = PreprocessT2Workspace(output_dir, id)
+
+    # Before upsampling, we need to create an image with two labels, 1 for the gray
+    # matter excluding dentate, and 2 for the dentate. 
+    lab_dg = preproc_opts["dg_labels"]
+    cl_old = { cat: template.get_labels_for_tissue_class(cat) for cat in ['bg','gm','wm'] }
+    cl_new = {
+        'bg': [ l for l in cl_old['bg'] + cl_old['wm'] if l not in lab_dg ],
+        'gm': [ l for l in cl_old['gm'] if l not in lab_dg ],
+        'dg': lab_dg
+    }
+
+    # Vote between posteriors based on category labels
+    img_dggm_seg, _ = ashs_posteriors_to_tissue_labels(ashs.posteriors, cl_new, ['bg','gm','dg'], 'bg')
+    sitk.WriteImage(img_dggm_seg, ws.fn_upsample_input)
+
+    # The first step is to upsample the ASHS T2 segmentation using the deep learning
+    # upsampling model. This will increase the z-resolution of the segmentation
+    upsample_t2(cdr, ashs, preproc_opts, ws)
+    
+    # Set white matter segmentation to zero
+    c3d = Convert3D()
+    c3d.execute(f'{ashs.tse_native_chunk} -scale 0 -type uchar -o {ws.fn_upsample_wm_seg}')
+
+    # Next, we need to propagate the original ASHS labels into the upsampled segmentations
+    # and extend the white matter over the alveus
+    upsampled_posterior_pattern = postprocess_t2_upsample(ashs, template, preproc_opts, ws, bypass_wm=True)
+    return upsampled_posterior_pattern
+    
+

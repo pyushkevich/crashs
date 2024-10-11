@@ -7,6 +7,7 @@ import glob
 import json
 import pkg_resources
 import copy
+import shutil
 
 from crashs.vtkutil import *
 
@@ -98,10 +99,13 @@ class Template :
             self.json = json.load(fn)
 
         # Load the template-specific json
-        with open(os.path.join(template_dir, 'template.json')) as template_json:
-            self.json = merge_dicts(self.json, json.load(template_json))     
+        local_json_fn = os.path.join(template_dir, 'template.json')
+        if os.path.exists(local_json_fn):
+            with open(local_json_fn) as template_json:
+                self.json = merge_dicts(self.json, json.load(template_json))     
+        else:
+            print(f'Template directory does not contain template.json file. Using default settings.')
 
-        print(self.json)
 
     def get_mesh(self, side):
         return os.path.join(self.root, self.json['sides'][side]['mesh'])
@@ -251,6 +255,41 @@ class ASHSFolder:
                     post = c3d.pop()
                     if np.count_nonzero(sitk.GetArrayFromImage(post)) > 0:
                         self.posteriors[v] = post
+                        
+
+# This method creates a dummy ASHS folder from a single segmentation
+def make_ashs_folder(fn_segmentation:str, id:str, side:str, fn_output_dir:str,
+                     fn_tse_chunk:str=None, fn_mprage:str=None,
+                     fn_affine_to_template=None, 
+                     correction_mode='heur'):
+    
+    
+    # Copy the segmentation with the correct name into the folder
+    c3d = Convert3D()
+    for sub in 'final', 'flirt_t2_to_t1', 'affine_t1_to_template':
+        os.makedirs(f'{fn_output_dir}/{sub}', exist_ok=True)
+    
+    # Save the segmentation
+    fn_out_seg = f'{fn_output_dir}/final/{id}_{side}_lfseg_{correction_mode}.nii.gz'
+    c3d.execute(f'{fn_segmentation} -type short -o {fn_out_seg}')
+    
+    # Save the TSE and MPRAGE
+    if fn_tse_chunk:
+        c3d.execute(f'{fn_tse_chunk} -o {fn_output_dir}/tse_native_chunk_{side}.nii.gz')
+    if fn_mprage:
+        c3d.execute(f'{fn_mprage} -o {fn_output_dir}/mprage.nii.gz.nii.gz')
+        
+    # Save the affine to template matrix
+    fn_out_affine_to_template = f'{fn_output_dir}/affine_t1_to_template/t1_to_template_affine.mat'
+    if fn_affine_to_template:
+        shutil.copy(fn_affine_to_template, fn_out_affine_to_template)
+    else:
+        np.savetxt(fn_out_affine_to_template, np.eye(4))
+        
+    # Return the ASHS folder for this
+    return ASHSFolder(fn_output_dir, side, 'bootstrap', correction_mode)
+        
+                      
 
     
 class Workspace:
