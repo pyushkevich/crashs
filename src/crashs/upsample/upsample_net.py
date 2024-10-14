@@ -441,7 +441,11 @@ def do_apply_single(args):
     # Compute the origin, spacing and direction
     spc, org = np.array(seg_a.GetSpacing()), np.array(seg_a.GetOrigin())
     spc_up = spc * np.array([1,1,0.2])
-    org_up = org + 0.5 * (spc_up - spc)
+    
+    # Computing origin requires direction matrix
+    dir_mat = np.array(seg_a.GetDirection()).reshape(3,3)    
+    org_up = org + 0.5 * dir_mat @ (spc_up - spc)
+    
     img_pred.SetDirection(seg_a.GetDirection())
     img_pred.SetOrigin(org_up)
     img_pred.SetSpacing(spc_up)

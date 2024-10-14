@@ -146,18 +146,7 @@ def postprocess_t2_upsample(
     # Split the upsampled image into GM and DG components
     c3d = Convert3D()
     c3d.execute(f'-mcs {ws.fn_upsample_output} {ws.fn_upsample_input} -thresh 1 1 1 0')
-    img_up_gm, img_up_dg, img_gm_lores = c3d.peek(0), c3d.peek(1), c3d.peek(2);
-
-    # Register the GM component to the in vivo GM
-    g = Greedy3D()
-    g.execute(
-        "-a -dof 6 -n 100x100 -m SSD -ia-identity -threads 1 "
-        "-i gm_lores gm_up -o affine",
-        gm_lores = img_gm_lores, gm_up = img_up_gm, affine=None)
-    g.execute(
-        "-rf gm_up -rm gm_up gm_up_shift -rm dg_up dg_up_shift -r affine",
-        dg_up=img_up_dg, gm_up_shift=None, dg_up_shift=None)
-    img_up_gm, img_up_dg = g['gm_up_shift'], g['dg_up_shift']
+    img_up_gm, img_up_dg = c3d.peek(0), c3d.peek(1)
 
     # Prefix for where to write temporary outouts
     tmppref = f'{ws.output_dir}/tmp/{ws.id}'
