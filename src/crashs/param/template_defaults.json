@@ -8,8 +8,8 @@
         }
     },
     "registration": {
-        "varifold_sigma": 5.0,
-        "lddmm_sigma": 5.0,
+        "varifold_sigma": 2.0,
+        "lddmm_sigma": 2.0,
         "lddmm_gamma": 0.05,
         "lddmm_nt": 10,
         "jacobian_penalty": 10.0,
