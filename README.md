@@ -53,26 +53,41 @@ export CRASHS_DATA=/my/crashs/folder/crashs_template_package_20240830
 
 We recommend adding the line above that sets the `CRASHS_DATA` environment variable to your `.bashrc`, `.bash_profile` or `.zshrc` file, depending on what shell you use. Alternatively, you can invoke CRASHS below with the `-C` switch to provide the path to the templates and models directory.
 
-## Running CRASHS on an example dataset 
+## Running CRASHS on a sample dataset (Docker)
 
 An example segmentation using T1-ASHS is provided in the folder `sample_data`. It can be used to test CRASHS.
 
 If using Docker, run the following command to open a command prompt on the container. Be sure to adjust paths `your_output_directory` and `/my/crashs/folder/crashs_template_package_20240830` to match your system. These paths will be mapped to paths `/data` and `/package` in the container.
 
 ```sh
-docker run -v your_output_directory:/data -v /my/crashs/folder/crashs_template_package_20240830:/package -it pyushkevich/crashs:latest /bin/bash
+docker run \
+    -v your_output_directory:/data \
+    -v /my/crashs/folder/crashs_template_package_20240830:/package \
+    -it pyushkevich/crashs:latest /bin/bash
 ```
 
 Run this command inside of the container to run CRASHS on the example T1-ASHS segmentation.
 
+```sh
+python3 -m crashs fit \
+    -C /package -s right -c corr_usegray \
+    sample_data/035_S_4082_2011-06-28 ashs_pmc_t1 /data/035_S_4082_2011-06-28
 ```
-python3 -m crashs fit -C /package -s right -c corr_usegray sample_data/035_S_4082_2011-06-28 ashs_pmc_t1 /data/035_S_4082_2011-06-28
+
+You should find the output from running CRASHS in folder `your_output_directory/035_S_4082_2011-06-28` on your system.
+
+## Running CRASHS on a sample dataset (pip install)
+
+If using CRASHS installed with `pip`, download the dataset from the `sample_data` folder in this repository to some location on your system, call it `your_input_dir`. Create an output directory, `your_output_dir`. Make sure the `CRASHS_DATA` environment variable has been set as explained above. Then you can run CRASHS on the sample dataset as follows:
+
+```sh
+python3 -m crashs fit \
+    -s right -c corr_usegray \
+    your_input_dir/035_S_4082_2011-06-28 ashs_pmc_t1 your_output_dir/035_S_4082_2011-06-28
 ```
 
+You should find the output from running CRASHS in folder `your_output_dir/035_S_4082_2011-06-28`.
 
-
-
- 
 ## Outputs from CRASHS
 The program generates many outputs, but the most useful ones are:
 * `fitting/[ID]_fitted_omt_hw_target.vtk`: the grey/white and grey/csf boundaries estimated by the `cruise_cortex_extraction` module of NighRes. These meshes are in physical (RAS) coordinate space, not in voxel (IJK) space output by Nighres. *If you extract meshes from the T1-ASHS segmentation in ITK-SNAP, those should line up with these meshes.*
@@ -84,8 +99,6 @@ The program generates many outputs, but the most useful ones are:
 * `thickness/[ID]_template_thickness.vtk`: a mesh with same geometry as the template that has a point array `VoronoiRadius` containing half-thickness of the gray matter at each vertex.
 
 * `thickness/[ID]_thickness_roi_summary.csv`: Mean and median half-thickness across gray matter ROIs.
-
-
 
 The following files can be used to check how well the fitting between the inflated template mid-surface and the inflated subject mid-surface worked.
 
