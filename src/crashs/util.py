@@ -382,6 +382,7 @@ def ashs_posteriors_to_tissue_probabilities(
     # Add up the posteriors corresponding to the different tissue labels
     p_cat = {}
     img_ref = None
+    p_max = 0
     for cat in category_order:
         p_cat[cat] = None
         for v in category_labels[cat]:
@@ -389,13 +390,14 @@ def ashs_posteriors_to_tissue_probabilities(
             if img_itk:
                 img_ref = img_itk
                 img_arr = sitk.GetArrayFromImage(img_itk)
+                p_max = np.maximum(p_max, np.max(img_arr))
                 p_cat[cat] = img_arr if p_cat[cat] is None else p_cat[cat] + img_arr
 
     # Normalize the posteriors so that the max total probability is one. Notably the posteriors
     # output by JLF can be negative and here we clip them to the zero/one range. Finally, we
     # optionally apply softmax
     x = np.concatenate([p_cat[cat][:, :, :, np.newaxis] for cat in category_order], axis=3)
-    p_max = np.max(np.sum(x, 3))
+    # p_max = np.max(np.sum(x, 3))
     x = np.clip(x, 0, p_max) / p_max;
 
     # Allocate the missing probability to the background 
