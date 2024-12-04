@@ -1,12 +1,13 @@
 # CRASHS: Cortical Reconstruction for Automatic Segmentation of Hippocampal Subfields (ASHS)
-CRASHS is a surface-based modeling and groupwise registration pipeline for the human medial temporal lobe (MTL). It is used to postprocess the results of [ASHS](https://github.com/pyushkevich/ashs) segmentation with ASHS atlases that contain a white matter label. CRASHS uses the [CRUISE](https://doi.org/10.1016/j.neuroimage.2004.06.043) technique implemented in the [NighRes software](https://nighres.readthedocs.io/en/latest/) to fit the white matter segmentation with a surface of spherical topology, and find a series of surfaces spanning between the gray/white boundary and the pial surface. The middle surface is inflated and registered to a population template, allowing surface-based analysis of MTL cortical thickness and other measures such as functional MRI and diffusion MRI. 
+CRASHS is a surface-based modeling and groupwise registration pipeline for the human medial temporal lobe (MTL). It can be used to perform groupwise analysis of pointwise measures in the MTL, such as cortical thickness, longitudinal volume change, functional MRI activation, microstructure, etc. It uses similar principles to whole-brain surface-based analysis pipelines like [FreeSurfer](https://surfer.nmr.mgh.harvard.edu/) and [CRUISE](https://doi.org/10.1016/j.neuroimage.2004.06.043), but restricted to the MTL region. CRASHS is used to postprocess the results of [ASHS](https://github.com/pyushkevich/ashs) segmentation with certain ASHS atlases.
+
+Some of the newer ASHS atlases include the white matter label, which is used by CRASHS. For other ASHS atlases, CRASHS can paint in the white matter label using [nnU-Net](https://github.com/MIC-DKFZ/nnUNet). CRASHS uses the [CRUISE](https://doi.org/10.1016/j.neuroimage.2004.06.043) technique implemented in the [NighRes software](https://nighres.readthedocs.io/en/latest/) to fit the white matter segmentation with a surface of spherical topology, and find a series of surfaces spanning between the gray/white boundary and the pial surface. The middle surface is inflated and registered to a population template, allowing surface-based analysis of MTL cortical thickness and other measures such as functional MRI and diffusion MRI. 
 
 The CRASHS pipeline is described in the supplemental material to our paper in the special issue of Alzheimer's and Dementia on the [20th anniversary of ADNI](https://doi.org/10.1002/alz.14161).
 
-
 ## Installation using `pip`
 
-CRASHS requires the `nighres` package, which cannot be installed with `pip`. To install `nighres`, please follow the [installation instructions](https://nighres.readthedocs.io/en/latest/). To our knowledge, ARM64 architecture is currently not supported.
+CRASHS requires the `nighres` package, which cannot be installed with `pip`. To install `nighres`, please follow the [installation instructions](https://nighres.readthedocs.io/en/latest/). To our knowledge, the ARM64 architecture (newer Macs) is currently not supported.
 
 Once `nighres` is installed, you can install CRASHS:
 
@@ -24,19 +25,7 @@ pip install .
 ```
 
 ## Docker
-This repository includes the CRASHS scripts and a `Dockerfile`. The official container on DockerHub is labeled `pyushkevich/crashs:latest`
-
-```sh
-docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
-python3 -m crashs fit --help
-```
-
-A sample dataset is also provided and can be processed as follows (also see `run_sample.sh`)
-
-```sh
-docker run -v your_data_directory:/data -it pyushkevich/crashs:latest /bin/bash
-python3 -m crashs fit -s right -r 0.1 sample_data/035_S_4082_2011-06-28 templates/crashs_template_01 /data/test
-```
+The CRASHS Docker container is available on DockerHub as `pyushkevich/crashs:latest`. Please see instructions below on using the container.
 
 ## Inputs to CRASHS
 The main input to the package is the ASHS output folder. Before running CRASHS, you will need to run ASHS on your MRI scans using one of the atlases for which a CRASHS template is available. 
@@ -63,6 +52,26 @@ export CRASHS_DATA=/my/crashs/folder/crashs_template_package_20240830
 ```
 
 We recommend adding the line above that sets the `CRASHS_DATA` environment variable to your `.bashrc`, `.bash_profile` or `.zshrc` file, depending on what shell you use. Alternatively, you can invoke CRASHS below with the `-C` switch to provide the path to the templates and models directory.
+
+## Running CRASHS on an example dataset 
+
+An example segmentation using T1-ASHS is provided in the folder `sample_data`. It can be used to test CRASHS.
+
+If using Docker, run the following command to open a command prompt on the container. Be sure to adjust paths `your_output_directory` and `/my/crashs/folder/crashs_template_package_20240830` to match your system. These paths will be mapped to paths `/data` and `/package` in the container.
+
+```sh
+docker run -v your_output_directory:/data -v /my/crashs/folder/crashs_template_package_20240830:/package -it pyushkevich/crashs:latest /bin/bash
+```
+
+Run this command inside of the container to run CRASHS on the example T1-ASHS segmentation.
+
+```
+python3 -m crashs fit -C /package -s right -c corr_usegray sample_data/035_S_4082_2011-06-28 ashs_pmc_t1 /data/035_S_4082_2011-06-28
+```
+
+
+
+
  
 ## Outputs from CRASHS
 The program generates many outputs, but the most useful ones are:
