@@ -53,6 +53,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: user/app:latest
+          tags: pyushkevich/crashs:latest
           cache-from: type=registry,ref=user/app:latest
           cache-to: type=inline
