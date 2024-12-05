@@ -8,6 +8,8 @@ on:
           description: 'Enable tmate debugging'
           required: false
           default: false
+  release:
+    types: [published]
 
 jobs:
   docker:
