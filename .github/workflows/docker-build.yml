@@ -66,5 +66,5 @@ jobs:
           context: .
           push: true
           tags: pyushkevich/crashs:${{ steps.versioncheck.outputs.local_version }}, pyushkevich/crashs:latest
-          cache-from: type=registry,ref=user/app:latest
+          cache-from: type=registry,ref=pyushkevich/crashs:latest
           cache-to: type=inline
