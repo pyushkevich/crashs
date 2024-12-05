@@ -19,18 +19,18 @@ jobs:
         continue-on-error: true
         run: |
           df -h
-          sudo apt-get remove -y 'temurin-.*'
-          sudo apt-get remove -y google-cloud-cli
-          sudo apt-get remove -y microsoft-edge-stable
-          sudo apt-get remove -y azure-cli
-          sudo apt-get remove -y google-chrome-stable
-          sudo apt-get remove -y '^ghc-8.*'
-          sudo apt-get remove -y '^dotnet-.*'
-          sudo apt-get remove -y '^llvm-.*'
-          sudo apt-get remove -y 'php.*'
-          sudo apt-get remove -y '^swift.*'
-          sudo apt-get remove -y powershell
-          sudo rm -rf /usr/share/dotnet/ /usr/share/swift/
+          sudo apt-get remove -y 'temurin-.*' || echo ok
+          sudo apt-get remove -y google-cloud-cli || echo ok
+          sudo apt-get remove -y microsoft-edge-stable || echo ok
+          sudo apt-get remove -y azure-cli || echo ok
+          sudo apt-get remove -y google-chrome-stable || echo ok
+          sudo apt-get remove -y '^ghc-8.*' || echo ok
+          sudo apt-get remove -y '^dotnet-.*' || echo ok
+          sudo apt-get remove -y '^llvm-.*' || echo ok
+          sudo apt-get remove -y 'php.*' || echo ok
+          sudo apt-get remove -y '^swift.*' || echo ok
+          sudo apt-get remove -y powershell || echo ok
+          sudo rm -rf /usr/share/dotnet/ /usr/share/swift/ || echo ok
           df -h
       -
         name: Login to Docker Hub
