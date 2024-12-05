@@ -1,7 +1,13 @@
-name: ci
+name: Docker Build
 
 on:
   workflow_dispatch:
+    inputs:
+        debug_enabled:
+          type: boolean
+          description: 'Enable tmate debugging'
+          required: false
+          default: false
 
 jobs:
   docker:
@@ -19,9 +25,15 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - 
+        name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
       -
         name: Build and push
         uses: docker/build-push-action@v6
         with:
           push: true
           tags: user/app:latest
+          cache-from: type=registry,ref=user/app:latest
+          cache-to: type=inline
