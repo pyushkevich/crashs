@@ -62,16 +62,19 @@ CRASHS offers different templates for different ASHS versions. Currently, the fo
 
 * **ashs_pmc_alveus**: Template for the high-resolution oblique coronal T2-weighted MRI version of [ASHS](https://doi.org/10.1002/hbm.22627). This template should be used with the **ASHS PMC** atlas. The white matter label will be added to the existing segmentation and extended synthetically over the alveus/fimbria, as described in our [ADNI 20th anniversary paper](https://doi.org/10.1002/alz.14161).
 
-## Running CRASHS on a sample dataset (Docker)
+## Running CRASHS on a sample dataset
 
-An example segmentation using T1-ASHS is provided in the folder `sample_data`. It can be used to test CRASHS.
+A sample dataset is included in the `sample_data` folder in the repository. Download it to some folder on your system (we will use `/my/crashs/folder/sample_data` for this tutorial). 
 
-If using Docker, run the following command to open a command prompt on the container. Be sure to adjust paths `your_output_directory` and `/my/crashs/folder/crashs_template_package_20240830` to match your system. These paths will be mapped to paths `/data` and `/package` in the container.
+### Instructions for Docker
+
+If using Docker, run the following command to open a command prompt on the container (change `/my/crashs/folder` to the right folder). 
 
 ```sh
 docker run \
     -v your_output_directory:/data \
     -v /my/crashs/folder/crashs_template_package_20240830:/package \
+    -v /my/crashs/folder/sample_data:/data \
     -it pyushkevich/crashs:latest /bin/bash
 ```
 
@@ -80,22 +83,46 @@ Run this command inside of the container to run CRASHS on the example T1-ASHS se
 ```sh
 python3 -m crashs fit \
     -C /package -s right -c corr_usegray \
-    sample_data/035_S_4082_2011-06-28 ashs_pmc_t1 /data/035_S_4082_2011-06-28
+    /sample_data/ashs_pmc_t1/subj01/ashs ashs_pmc_t1 /sample_data/ashs_pmc_t1/subj01/crashs
 ```
 
-You should find the output from running CRASHS in folder `your_output_directory/035_S_4082_2011-06-28` on your system.
+You should find the output from running CRASHS in folder `/my/crashs/folder/sample_data/ashs_pmc_t1/subj01` on your system.
 
-## Running CRASHS on a sample dataset (pip install)
+### Instructions for `pip` install
 
-If using CRASHS installed with `pip`, download the dataset from the `sample_data` folder in this repository to some location on your system, call it `your_input_dir`. Create an output directory, `your_output_dir`. Make sure the `CRASHS_DATA` environment variable has been set as explained above. Then you can run CRASHS on the sample dataset as follows:
+If using CRASHS installed with `pip` and the `CRASHS_DATA` environment variable has been set as explained above, use the command below to run CRASHS on the on the example T1-ASHS segmentation:
 
 ```sh
 python3 -m crashs fit \
     -s right -c corr_usegray \
-    your_input_dir/035_S_4082_2011-06-28 ashs_pmc_t1 your_output_dir/035_S_4082_2011-06-28
+    /my/crashs/folder/sample_data/ashs_pmc_t1/subj01/ashs \
+    ashs_pmc_t1 \
+    /my/crashs/folder/sample_data/ashs_pmc_t1/subj01/crashs
 ```
 
-You should find the output from running CRASHS in folder `your_output_dir/035_S_4082_2011-06-28`.
+You should find the output from running CRASHS in folder `/my/crashs/folder/sample_data/ashs_pmc_t1/subj01/crashs`.
+
+### T2 Example
+
+Another example in the `sample_data` folder can be used to test CRASHS for T2-weighted MRI processed with the ASHS-PMC atlas. It is better to run this example on a machine with an NVidia GPU because a nnU-Net is used by CRASHS to generate the white matter label; otherwise expect it to take 30-60 minutes to complete. If using Docker, include the flag `--gpus all` when calling the `docker run` command to make the GPU available to the container.
+
+You can run the example in the Docker container like this:
+
+```sh
+python3 -m crashs fit -C /package -s left -c heur \
+    /data/ashs_pmc_alveus/subj02/ashs \
+    ashs_pmc_alveus \
+    /data/ashs_pmc_alveus/subj02/crashs
+```
+
+Or using CRASHS pip install like this:
+
+```sh
+python3 -m crashs fit -s left -c heur \
+    /my/crashs/folder/sample_data/ashs_pmc_alveus/subj02/ashs \
+    ashs_pmc_alveus \
+    /my/crashs/folder/sample_data/ashs_pmc_alveus/subj02/crashs
+```
 
 ## Outputs from CRASHS
 The program generates many outputs, but the most useful ones are:
