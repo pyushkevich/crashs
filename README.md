@@ -146,8 +146,25 @@ The following files can be used to check how well the fitting between the inflat
 
 * `fitting/[ID]_fitted_dist_stat.json`: distance statistics of the fitting, including average, max, and 95th percentile of the distance. Useful to check for poor fitting results.
 
-## Citation
-* PA Yushkevich, L Xie, LEM Wisse, M Dong, S Ravikumar, R Ittyerah,  R de Flores, SR Das, DA Wolk for the Alzheimer’s Disease Neuroimaging Initiative (ADNI), Mapping Medial Temporal Lobe Longitudinal Change in Preclinical Alzheimer’s Disease, 2023 Alzheimer's Association International Conference (AAIC 2023).
+## CRASHS command-line parameters
+
+Run `python3 -m crashs fit --help` to print the command-line parameters.
+
+One set of parameters is used to specify which ASHS output should be used for fitting the geometrical representation:
+
+* `-s {left,right}` is used to specify the side of the brain that should be fitted
+* `-f {multiatlas,bootstrap}` is used to specify whether to use the ASHS output from the initial multi-atlas stage or the second bootstrap stage. Typically the bootstrap stage segmentation is better (accuracy is higher, on average, in ASHS validation experiments), so the default setting of `bootstrap` should be used.
+* `-c {heur,corr_usegray,corr_nogray}` is used to specify which correction mode in ASHS should be used. The `heur` mode does not use any pixel-level machine learning correction and typically corresponds to smoothest shape segmentations. If the data on which you run ASHS is not well matched to the data on which ASHS was trained, it is best to use the `heur` option. The `corr_usegray` mode uses pixel-level machine learning correction, and in our validation experiments, has highest accuracy, but only if the data being segmented is similar to the training data (similar MRI protocol, age, etc.). Finally `corr_nogray` is an intermediate option that is rarely used.
+
+The other parameters you may need to set are `-i` (specify the ID of the subject, used as a prefix in CRASHS output files), `-d` (specifies the device to use for PyTorch, e.g., `cuda0` if you have an NVidia GPU, `cpu` otherwise, and `-C` (to point to the templates and models folder if you didn't set the `CRASHS_DATA` environment variable). 
+
+The options starting with `--skip` are used to skip certain steps when re-running CRASHS in the same folder. They are mostly used for debugging.
+
+## Citations
+
+* Yushkevich PA, Ittyerah R, Li Y, et al. Morphometry of medial temporal lobe subregions using high-resolution T2-weighted MRI in ADNI3: Why, how, and what's next? Alzheimer's Dement. 2024; 20: 8113–8128. https://doi.org/10.1002/alz.14161
+
+* PA Yushkevich, L Xie, LEM Wisse, et al., Mapping Medial Temporal Lobe Longitudinal Change in Preclinical Alzheimer’s Disease, 2023 Alzheimer's Association International Conference (AAIC 2023).
 
 
     
