@@ -16,12 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - 
-        name: Check pypi version
-        uses: maybe-hello-world/pyproject-check-version@v4
-        id: versioncheck
-        with:
-          pyproject-path: "./pyproject.toml"
-      - 
         name: Free up space on runner for Docker
         shell: bash
         continue-on-error: true
@@ -56,6 +50,12 @@ jobs:
         name: Setup tmate session
         uses: mxschmitt/action-tmate@v3
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
+      - 
+        name: Check pypi version
+        uses: maybe-hello-world/pyproject-check-version@v4
+        id: versioncheck
+        with:
+          pyproject-path: "./pyproject.toml"
       -
         name: Build and push
         uses: docker/build-push-action@v6
