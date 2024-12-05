@@ -16,6 +16,7 @@ jobs:
       - 
         name: Free up space on runner for Docker
         shell: bash
+        continue-on-error: true
         run: |
           df -h
           sudo apt-get remove -y 'temurin-.*'
