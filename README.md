@@ -16,12 +16,11 @@ pip install crashs
 python3 -m crashs fit --help
 ```
 
-Or, if you want to run the latest development code:
+Or, if you want to use the latest development code and install in "editable" mode:
 
 ```sh
 git clone https://github.com/pyushkevich/crashs
-cd crashs
-pip install .
+pip install -e ./crashs
 ```
 
 ## Installation using Docker
