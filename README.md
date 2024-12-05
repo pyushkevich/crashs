@@ -24,21 +24,22 @@ cd crashs
 pip install .
 ```
 
-## Docker
-The CRASHS Docker container is available on DockerHub as `pyushkevich/crashs:latest`. Please see instructions below on using the container.
+## Installation using Docker
+The CRASHS Docker container is available on DockerHub as `pyushkevich/crashs:latest`. Use the command below to download the container.
 
-## Inputs to CRASHS
-The main input to the package is the ASHS output folder. Before running CRASHS, you will need to run ASHS on your MRI scans using one of the atlases for which a CRASHS template is available. 
+```sh
+docker pull pyushkevich/crashs:latest
+```
 
-CRASHS offers different templates for different ASHS versions. Currently, the following templates are provided:
+If you are using newer Mac with the ARM processor, you may need to use the `-platform` flag to download the container:
 
-* **ashs_pmc_t1**: Template for the T1-weighted MRI version of ASHS [T1-ASHS](https://doi.org/10.1002/hbm.24607) using the [ASHS-PMC-T1 atlas](https://www.nitrc.org/frs/?group_id=370). We recommend using the 2023 ASHS-PMC-T1 atlas with the white matter label. However, you can also provide segmentations created using the original ASHS-PMC-T1 atlas and the white matter label will be added to the existing segmentation automatically, using [nnUNet](https://github.com/MIC-DKFZ/nnUNet). 
-
-* **ashs_pmc_alveus**: Template for the high-resolution oblique coronal T2-weighted MRI version of [ASHS](https://doi.org/10.1002/hbm.22627). The white matter label will be added to the existing segmentation and extended synthetically over the alveus/fimbria, as described in our [ADNI 20th anniversary paper](https://doi.org/10.1002/alz.14161).
+```sh
+docker pull --platform linux/amd64 pyushkevich/crashs:latest
+```
 
 ## Downloading CRASHS Templates and Models 
 
-You can download the templates and pretrained models for running CRASHS from this link:
+Before using CRASHS, you will need to download the templates and pretrained models from this link:
 
 * https://doi.org/10.5061/dryad.kkwh70scx
 
@@ -52,6 +53,15 @@ export CRASHS_DATA=/my/crashs/folder/crashs_template_package_20240830
 ```
 
 We recommend adding the line above that sets the `CRASHS_DATA` environment variable to your `.bashrc`, `.bash_profile` or `.zshrc` file, depending on what shell you use. Alternatively, you can invoke CRASHS below with the `-C` switch to provide the path to the templates and models directory.
+
+## Inputs to CRASHS
+The main input to the package is the ASHS output folder. Before running CRASHS, you will need to run ASHS on your MRI scans using one of the atlases for which a CRASHS template is available. 
+
+CRASHS offers different templates for different ASHS versions. Currently, the following templates are provided:
+
+* **ashs_pmc_t1**: Template for the T1-weighted MRI version of ASHS [T1-ASHS](https://doi.org/10.1002/hbm.24607) using the [ASHS-PMC-T1 atlas](https://www.nitrc.org/frs/?group_id=370). We recommend using the **2023 ASHS-PMC-T1 atlas with the white matter label**. However, you can also provide segmentations created using the original ASHS-PMC-T1 atlas and the white matter label will be added to the existing segmentation automatically, using [nnUNet](https://github.com/MIC-DKFZ/nnUNet). 
+
+* **ashs_pmc_alveus**: Template for the high-resolution oblique coronal T2-weighted MRI version of [ASHS](https://doi.org/10.1002/hbm.22627). This template should be used with the **ASHS PMC** atlas. The white matter label will be added to the existing segmentation and extended synthetically over the alveus/fimbria, as described in our [ADNI 20th anniversary paper](https://doi.org/10.1002/alz.14161).
 
 ## Running CRASHS on a sample dataset (Docker)
 
