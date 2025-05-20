@@ -201,7 +201,7 @@ def cruise_postproc(template:Template, ashs:ASHSFolder, workspace: Workspace, re
         save_vtk(pd_lset, workspace.fn_cruise(f'mtl_{lset}_l2m-mesh-ras.vtk'))
 
     # Apply the affine transform from ASHS, taking the mesh to template space
-    M = np.linalg.inv(np.loadtxt(ashs.affine_to_template))
+    M = np.linalg.inv(np.loadtxt(ashs.affine_to_template)) if ashs.affine_to_template else np.eye(4)
     x_infl = x_infl @ M[:3,:3].T + M[:3,3:].T 
     vtk_set_points(pd_infl, x_infl)
     save_vtk(pd_infl, workspace.affine_moving)
@@ -793,6 +793,8 @@ class FitLauncher:
                         help='Skip the optimal transport matching step')
         parse.add_argument('--skip-thick', action='store_true',
                         help='Skip the thickness computation step')
+        parse.add_argument('--no-t2-upsample', action='store_true',
+                        help='Skip the upsampling of ASHS T2 segmentation - use when ASHS outputs nearly isotropic segmentations')
 
         # Set the function to run
         parse.set_defaults(func = lambda args : self.run(args))
@@ -833,7 +835,7 @@ class FitLauncher:
             if template.get_preprocessing_mode() == 't2_alveus':
                 fn_preproc = f'{args.output_dir}/preprocess/t2_alveus'
                 print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
-                upsampled_posterior_pattern = import_ashs_t2(cdr, ashs, template, fn_preproc, expid, device)
+                upsampled_posterior_pattern = import_ashs_t2(cdr, ashs, template, fn_preproc, expid, device, skip_upsample_t2=args.no_t2_upsample)
                 ashs.set_alternate_posteriors(upsampled_posterior_pattern)
                 ashs.load_posteriors(template)
             elif not have_wm and template.get_preprocessing_mode() == 't1_add_wm':
