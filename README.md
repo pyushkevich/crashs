@@ -9,13 +9,13 @@ The CRASHS pipeline is described in the supplemental material to our paper in th
 
 ## Installation using `pip`
 
-CRASHS requires the `nighres` package, which cannot be installed with `pip`. To install `nighres`, please follow the [installation instructions](https://nighres.readthedocs.io/en/latest/). To our knowledge, the ARM64 architecture (newer Macs) is currently not supported.
+CRASHS requires the `nighres` package, which cannot be installed with `pip`. To install `nighres`, please follow the [installation instructions](https://nighres.readthedocs.io/en/latest/).
 
 Once `nighres` is installed, you can install CRASHS:
 
 ```sh
 pip install crashs
-python3 -m crashs fit --help
+python3 -m crashs --help
 ```
 
 Or, if you want to use the latest development code and install in "editable" mode:
@@ -38,19 +38,35 @@ If you are using newer Mac with the ARM processor, you may need to use the `-pla
 docker pull --platform linux/amd64 pyushkevich/crashs:latest
 ```
 
-## Downloading CRASHS Templates and Models 
-
-Before using CRASHS, you will need to download the templates and pretrained models from this link:
-
-* https://doi.org/10.5061/dryad.kkwh70scx
-
-Download and extract the archive and set the environment variable `CRASHS_DATA` to point to the folder in which you extract the archive.
+After pulling the Docker container, use the command below to open a bash shell in the docker container, which will allow you to execute CRASHS commands in the container. The folder `/my/crashs/folder/sample_data` below stands for a folder on your file system that contains ASHS outputs that you wish to process. The folder `/my/crashs/folder/crashs_template_package` is a folder to which CRASHS will download its template package. The first time your run CRASHS, this should be an empty folder that you create. 
 
 ```sh
-cp ~/Downloads/crashs_template_package_20240830.tgz /my/crashs/folder
-cd /my/crashs/folder
-tar -zxvf crashs_template_package_20240830.tgz
-export CRASHS_DATA=/my/crashs/folder/crashs_template_package_20240830
+docker run \
+    -v your_output_directory:/data \
+    -v /my/crashs/folder/crashs_template_package:/package \
+    -v /my/crashs/folder/sample_data:/data \
+    -it pyushkevich/crashs:latest /bin/bash
+```
+
+
+## Downloading CRASHS Templates and Models 
+
+Before using CRASHS, you will need to download the templates and pretrained models. The models are stored on HuggingFace at https://huggingface.co/datasets/pyushkevich/crashs_template_package, and can be downloaded to a folder on your filesystem (in the example below, `/my/crashs/folder/crashs_template_package`) using:
+
+```sh
+python crashs download /my/crashs/folder/crashs_template_package
+```
+
+If running inside of the Docker container, the command is:
+
+```sh
+python crashs download /package
+```
+
+The same command can be used in the future to update the template package to the latest version. It is convenienet to set the environment variable `CRASHS_DATA` to point to the folder where the package was downloaded: 
+
+```sh
+export CRASHS_DATA=/my/crashs/folder/crashs_template_package
 ```
 
 We recommend adding the line above that sets the `CRASHS_DATA` environment variable to your `.bashrc`, `.bash_profile` or `.zshrc` file, depending on what shell you use. Alternatively, you can invoke CRASHS below with the `-C` switch to provide the path to the templates and models directory.
@@ -62,6 +78,8 @@ CRASHS offers different templates for different ASHS versions. Currently, the fo
 
 * **ashs_pmc_t1**: Template for the T1-weighted MRI version of ASHS [T1-ASHS](https://doi.org/10.1002/hbm.24607) using the [ASHS-PMC-T1 atlas](https://www.nitrc.org/frs/?group_id=370). We recommend using the **2023 ASHS-PMC-T1 atlas with the white matter label**. However, you can also provide segmentations created using the original ASHS-PMC-T1 atlas and the white matter label will be added to the existing segmentation automatically, using [nnUNet](https://github.com/MIC-DKFZ/nnUNet). 
 
+* **ashs_pmc_t1exst**: Template for the T1-weighted MRI version of ASHS [T1-ASHS](https://doi.org/10.1002/hbm.24607) using the [ASHS-PMC-T1ext atlas](https://www.nitrc.org/frs/?group_id=370). This atlas extends the MTL cortical structures (ERC, BA35, BA36) more anteriorly and also includes the amygdala and white matter labels.  
+
 * **ashs_pmc_alveus**: Template for the high-resolution oblique coronal T2-weighted MRI version of [ASHS](https://doi.org/10.1002/hbm.22627). This template should be used with the **ASHS PMC** atlas. The white matter label will be added to the existing segmentation and extended synthetically over the alveus/fimbria, as described in our [ADNI 20th anniversary paper](https://doi.org/10.1002/alz.14161).
 
 ## Running CRASHS on a sample dataset
@@ -69,16 +87,6 @@ CRASHS offers different templates for different ASHS versions. Currently, the fo
 A sample dataset is included in the `sample_data` folder in the repository. Download it to some folder on your system (we will use `/my/crashs/folder/sample_data` for this tutorial). 
 
 ### Instructions for Docker
-
-If using Docker, run the following command to open a command prompt on the container (change `/my/crashs/folder` to the right folder). 
-
-```sh
-docker run \
-    -v your_output_directory:/data \
-    -v /my/crashs/folder/crashs_template_package_20240830:/package \
-    -v /my/crashs/folder/sample_data:/data \
-    -it pyushkevich/crashs:latest /bin/bash
-```
 
 Run this command inside of the container to run CRASHS on the example T1-ASHS segmentation.
 
@@ -128,15 +136,11 @@ python3 -m crashs fit -s left -c heur \
 
 ## Outputs from CRASHS
 The program generates many outputs, but the most useful ones are:
-* `fitting/[ID]_fitted_omt_hw_target.vtk`: the grey/white and grey/csf boundaries estimated by the `cruise_cortex_extraction` module of NighRes. These meshes are in physical (RAS) coordinate space, not in voxel (IJK) space output by Nighres. *If you extract meshes from the T1-ASHS segmentation in ITK-SNAP, those should line up with these meshes.*
+* `thickness/[ID]_template_thickness.vtk`: a mesh with same number of vertices and faces as the CRASHS template that has been fitted to the mid-surface of the cortex and that contains point array `VoronoiRadius` that estimates half-thickness of the cortex at each vertex. This is the main output to use for downstream statistical analysis. Additionally, array `plab` contains the posterior probability of each anatomical label defined in the template. Value `0` corresponds to the white matter, and thickness values there should be ignored (most of them will be `NaN` anyway). **These meshes can be used for groupwise analysis of cortical thickness**.
 
-* `fitting/[ID]_fitted_omt_hw_target.vtk`: the mid-surface of the gray matter estimated by the `volumetric_layering` module of NighRes. Also in RAS space.
+* `thickness/[ID]_thickness_roi_summary.csv`: Mean and median of the `VoronoiRadius` array in `thickness/[ID]_template_thickness.vtk` integrated over ROIs defined in the template.
 
-* `fitting/[ID]_fitted_omt_match_to_hw.vtk`: the template mesh projected onto the mid-surface surface, also in RAS space. This should have the same geometry as the mid-surface, but the same number of vertices/faces as the template. This mesh will also have scalar arrays for the anatomical label and other features from the template, such as template curvature (useful for visualization). **This mesh can be used to map data from subject space (thickness, fMRI, NODDI, etc) into template space for group analysis**
-
-* `thickness/[ID]_template_thickness.vtk`: a mesh with same geometry as the template that has a point array `VoronoiRadius` containing half-thickness of the gray matter at each vertex.
-
-* `thickness/[ID]_thickness_roi_summary.csv`: Mean and median half-thickness across gray matter ROIs.
+* `fitting/[ID]_fitted_omt_match_to_p00.vtk ... fitting/[ID]_fitted_omt_match_to_p09.vtk`: these meshes are similar to `thickness/[ID]_template_thickness.vtk` in that they represent the template's geometry fitted to the subject's cortex, but they are fitted to different layers: `00` corresponds to the gray-white surface and `09` to the pial surface. **These meshes can be used to sample data from the cortex in subject space (fMRI, NODDI, etc) into template space for group analysis**
 
 The following files can be used to check how well the fitting between the inflated template mid-surface and the inflated subject mid-surface worked.
 
