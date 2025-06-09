@@ -736,8 +736,8 @@ def compute_thickness_stats(template: Template, ws: Workspace, pruning_geodesic_
 
     # Compute the skeleton
     print('Calling cmrep_vskel with ')
-    print(f'-e 2 -c 1 -p {pruning_geodesic_factor} -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
-    cmrep_vskel(f'-e 2 -c 1 -p {pruning_geodesic_factor} -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
+    print(f'-e 2 -c 1 -p {pruning_geodesic_factor} -C -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
+    cmrep_vskel(f'-e 2 -c 1 -p {pruning_geodesic_factor} -C -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
 
     # Sample the thickness from the tetrahedra onto the template grid
     print('Calling mesh_tetra_sample with ')
