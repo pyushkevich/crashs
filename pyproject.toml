@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "crashs"
-version = "0.2.10"
+version = "0.2.11"
 authors = [
   { name="Paul Yushkevich", email="pyushkevich@gmail.com" },
 ]
@@ -21,7 +21,7 @@ dependencies = [
   'monai',
   'picsl_c3d>=1.4.2.1',
   'picsl_greedy>=0.0.5',
-  'picsl_cmrep>=1.0.2.0',
+  'picsl_cmrep>=1.0.3.0',
   'nnunetv2',
   'acvl_utils==0.2',
   'blosc2',
