@@ -4,6 +4,7 @@ from crashs.crashs import FitLauncher
 from crashs.build_template import BuildTemplateLauncher
 from crashs.roi_integrate import ROILauncher
 from crashs.profile_sampling import ProfileSamplingLauncher, ProfileMappingLauncher
+from crashs.derive_template import DeriveTemplateLauncher
 
 # Create a parser
 parse = argparse.ArgumentParser(
@@ -30,6 +31,9 @@ c_prof_sam = ProfileSamplingLauncher(
     
 c_prof_map = ProfileMappingLauncher(
     sub.add_parser('profile_map', help='Map data from template to subject using CRASHS profiles'))
+
+c_derive = DeriveTemplateLauncher(
+    sub.add_parser('derive_template', help='Derive a new template from an existing one using a target geometry'))
 
 # Parse the arguments
 args = parse.parse_args()
