@@ -320,9 +320,11 @@ class Workspace:
         self.cruise_dir = os.path.join(self.output_dir, 'cruise')
         self.fit_dir = os.path.join(self.output_dir, 'fitting')
         self.thick_dir = os.path.join(self.output_dir, 'thickness')
+        self.preproc_dir = os.path.join(self.output_dir, 'preprocess')
         os.makedirs(self.cruise_dir, exist_ok=True)
         os.makedirs(self.fit_dir, exist_ok=True)
         os.makedirs(self.thick_dir, exist_ok=True)
+        os.makedirs(self.preproc_dir, exist_ok=True)
 
         self.cruise_fn_base = f'{self.expid}_mtl'
         self.cruise_wm_prob = self.fn_cruise('wm_prob.nii.gz')

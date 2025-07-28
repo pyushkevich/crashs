@@ -333,7 +333,8 @@ def upsample_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, preproc_opts: dict, ws: Pr
     upsample_net.do_apply_single(upsample_args)
 
 
-def import_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device, skip_upsample_t2=False):
+def import_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device, 
+                   skip_upsample_t2=False, skip_add_wm_t1=False):
 
     # Read the preprocessing/upsampling options
     preproc_opts = template.json['preprocessing']['t2_alveus_param']
@@ -360,21 +361,38 @@ def import_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, outp
     sitk.WriteImage(img_dggm_seg, ws.fn_upsample_input)
 
     # Upsample the T2 segmentation using the deep learning (optional)
-    if not skip_upsample_t2:
+    if not skip_upsample_t2 and preproc_opts.get('upsample_model') is not None:
         # The first step is to upsample the ASHS T2 segmentation using the deep learning
         # upsampling model. This will increase the z-resolution of the segmentation
+        print("Upsampling T2 ASHS segmentation using deep learning model")
         upsample_t2(cdr, ashs, preproc_opts, ws)
         
     else:
         # We don't always want to upsample the T2 - in newer ASHS the output is already isotropic
         # and does not require upsampling. But we still want to add the white matter label.
+        print("Skipping T2 ASHS segmentation upsampling")
         c3d = Convert3D()
         c3d.push(img_dggm_seg)
         c3d.execute(f'-as S -replace 0 255 -split -pop -omc {ws.fn_upsample_output} -push S -type uchar -o {ws.fn_upsample_output_bin}')
                 
-    # Add the white matter label
-    nnunet_model = cdr.find_model(template.get_white_matter_nnunet_model())
-    add_wm_segmentation_to_ashs_t2(ashs, template, nnunet_model, ws, device)        
+    # Add the white matter label (if it is not already present)
+    nnunet_model_name = template.get_white_matter_nnunet_model()
+    if not skip_add_wm_t1 and nnunet_model_name:
+        print("Using nnU-Net to add white matter label to T2 ASHS segmentation")
+        nnunet_model = cdr.find_model(nnunet_model_name)
+        add_wm_segmentation_to_ashs_t2(ashs, template, nnunet_model, ws, device)
+    else:
+        # Just extract the white matter from the initial ASHS segmentation
+        # TODO: this only makes sense if the ASHS T2 segmentation has been upsampled
+        print("Skipping white matter label addition to T2 ASHS segmentation")
+        tissue_cat = ['wm', 'gm', 'bg']
+        tissue_cat_labels = { k: template.get_labels_for_tissue_class(k) for k in tissue_cat }
+        img_cat = ashs_posteriors_to_tissue_probabilities(ashs.posteriors, tissue_cat_labels, tissue_cat, 'bg')
+        img_wm = sitk.GetImageFromArray(sitk.GetArrayFromImage(img_cat)[:,:,:,0])
+        img_wm.CopyInformation(img_cat)
+        c3d = Convert3D()
+        c3d.push(img_wm)
+        c3d.execute(f'-o {ws.fn_upsample_wm_seg}')
 
     # Next, we need to propagate the original ASHS labels into the upsampled segmentations
     # and extend the white matter over the alveus

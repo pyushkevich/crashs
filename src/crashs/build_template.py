@@ -11,9 +11,11 @@ from sklearn.decomposition import PCA
 from crashs.vtkutil import *
 from crashs.lddmm import *
 from crashs.omt import *
-from crashs.util import MeshData, Template, ASHSFolder, Workspace
+from crashs.util import MeshData, Template, ASHSFolder, Workspace, CrashsDataRoot
 from crashs.crashs import ashs_output_to_cruise_input, run_cruise, cruise_postproc
 from crashs.crashs import omt_match_fitted_template_to_target
+from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1
+
 
 # Workspace for building the template
 class TemplateBuildWorkspace:
@@ -643,6 +645,8 @@ class BuildTemplateLauncher:
     def __init__(self, parse):
 
         # Add the arguments
+        parse.add_argument('-C', '--crashs-data', metavar='dir', type=str,
+                           help='Path of the CRASHS data folder, if CRASHS_DATA not set')
         parse.add_argument('template_init_dir', help='Template initial directory structure', type=pathlib.Path)
         parse.add_argument('ashs_json', help='JSON file desribing the input files', type=argparse.FileType('rt'))
         parse.add_argument('work_dir', metavar='work_dir', type=str, help='Working directory')
@@ -653,6 +657,11 @@ class BuildTemplateLauncher:
                         help='Which ASHS correction output to select', default='corr_usegray')                   
         parse.add_argument('-d', '--device', type=str, 
                         help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
+        parse.add_argument('--skip-preproc', action='store_true',
+                help='Skip the preprocessing step')
+        parse.add_argument('--no-t2-upsample', action='store_true',
+                        help='Skip the upsampling of ASHS T2 segmentation - use when ASHS outputs nearly isotropic segmentations')
+
         parse.add_argument('--skip-cruise', action='store_true')
         parse.add_argument('--skip-affine', action='store_true')
 
@@ -661,6 +670,8 @@ class BuildTemplateLauncher:
 
     
     def run(self, args):
+
+        cdr = CrashsDataRoot(args.crashs_data)
 
         # Load the template
         template = Template(args.template_init_dir)
@@ -696,14 +707,32 @@ class BuildTemplateLauncher:
                 out_dir = os.path.join(args.work_dir, id)
                 os.makedirs(out_dir, exist_ok=True)
                 workspace = Workspace(out_dir, id, side)
+                
+                # Load the ASHS experiment
+                ashs_dir = d['ashs_dir'] if 'ashs_dir' in d else d['path']
+                ashs = ASHSFolder(ashs_dir, side, args.fusion_stage, args.correction_mode)
+                ashs.load_posteriors(template)
+
+                # Determine if the current template requires additional postprocessing steps
+                # to convert the ASHS output into an input suitable for CRASHS
+                if not args.skip_preproc:
+                    if template.get_preprocessing_mode() == 't2_alveus':
+                        fn_preproc = f'{workspace.preproc_dir}/t2_alveus'
+                        print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
+                        upsampled_posterior_pattern = import_ashs_t2(cdr, ashs, template, fn_preproc, id, device, skip_upsample_t2=args.no_t2_upsample)
+                        ashs.set_alternate_posteriors(upsampled_posterior_pattern)
+                        ashs.load_posteriors(template)
+                    elif not have_wm and template.get_preprocessing_mode() == 't1_add_wm':
+                        fn_preproc = f'{workspace.preproc_dir}/t1_add_wm'
+                        print("Performing ASHS-T1 preprocessing steps (add WM label)")
+                        upsampled_posterior_pattern = add_wm_to_ashs_t1(cdr, ashs, template, fn_preproc, id, device)
+                        ashs.set_alternate_posteriors(upsampled_posterior_pattern)
+                        ashs.load_posteriors(template)
+                    elif not have_wm:
+                        raise ValueError('ASHS folder missing white matter segmentation!')
 
                 # Run the CRUISE part
                 if not args.skip_cruise:
-
-                    # Load the ASHS experiment
-                    ashs_dir = d['ashs_dir'] if 'ashs_dir' in d else d['path']
-                    ashs = ASHSFolder(ashs_dir, side, args.fusion_stage, args.correction_mode)
-                    ashs.load_posteriors(template)
 
                     # Convert the inputs into probability maps
                     print("Converting ASHS-T1 posteriors to CRUISE inputs")
