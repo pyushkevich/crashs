@@ -715,7 +715,7 @@ def subject_to_template_fit_omt_keops(template:Template, workspace: Workspace, d
         json.dump(dist_stat, jsonfile)
 
 
-def compute_thickness_stats(template: Template, ws: Workspace):
+def compute_thickness_stats(template: Template, ws: Workspace, pruning_geodesic_factor=1.6):
 
     # Generate the levelset from which we will compute the thickness data
     fn_gwb = ws.fn_cruise('mtl_cruise-gwb.nii.gz')
@@ -736,8 +736,8 @@ def compute_thickness_stats(template: Template, ws: Workspace):
 
     # Compute the skeleton
     print('Calling cmrep_vskel with ')
-    print(f'-e 2 -c 1 -p 1.6 -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
-    cmrep_vskel(f'-e 2 -c 1 -p 1.6 -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
+    print(f'-e 2 -c 1 -p {pruning_geodesic_factor} -C -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
+    cmrep_vskel(f'-e 2 -c 1 -p {pruning_geodesic_factor} -C -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
 
     # Sample the thickness from the tetrahedra onto the template grid
     print('Calling mesh_tetra_sample with ')
@@ -781,6 +781,8 @@ class FitLauncher:
                         help='Use KeOps routines for registration and OMT (GPU needed)')
         parse.add_argument('-r', '--reduction', type=float, 
                         help='Reduction to apply to meshes for geodesic shooting', default=None)
+        parse.add_argument('--pruning-geodesic-factor', type=float, default=1.6,
+                        help='Pruning factor applied to the Voronoi skeleton during thickness computation, see cmrep_vskel option -p')
         parse.add_argument('--lddmm-iter', type=int, default=None,
                         help='Number of iterations for geodesic shooting')
         parse.add_argument('--skip-preproc', action='store_true',
@@ -880,5 +882,5 @@ class FitLauncher:
 
         # Compute thickness statistics
         if args.skip_thick is False:
-            compute_thickness_stats(template, workspace)
+            compute_thickness_stats(template, workspace, pruning_geodesic_factor=args.pruning_geodesic_factor)
 
