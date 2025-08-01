@@ -201,9 +201,13 @@ def postprocess_t2_upsample(
                 f'-thresh 2 2 1 0 -dup -comp -thresh 1 1 1 0 -times '
                 f'-push img_up_gm -push img_up_dg -max -stretch 0 1 1 0 -times '
                 f'-o {tmppref}_csf_pseudo_wm_prob.nii.gz -as img_pseudo_wm_prob')
+    
+    # Temporary workaround for -pad command messing up origin
+    c3d.execute(f"-clear -push img_up_gm -pad 10x10x10 10x10x10 0 -o {tmppref}_pad_ref_space.nii.gz")
 
     # Generate the padded GM, WM and CSF probability images
-    c3d.execute(f'-clear -push img_up_gm -pad 10x10x10 10x10x10 0 -as Q -thresh 0 {thresh_level} 1 0 -popas M '
+    # c3d.execute(f'-clear -push img_up_gm -pad 10x10x10 10x10x10 0 -as Q -thresh 0 {thresh_level} 1 0 -popas M '
+    c3d.execute(f'-clear {tmppref}_pad_ref_space.nii.gz -as Q -thresh 0 {thresh_level} 1 0 -popas M '
                 f'-push Q -stretch 0 {thresh_level} 0 0.5 -clip 0 0.5 -push M -times '
                 f'-push Q -stretch {thresh_level} 1 0.5 1.0 -clip 0.5 1.0 -push M -stretch 0 1 1 0 -times -max '
                 f'-as B -dup -push hc_overlap -int 0 -reslice-identity -as O1 '

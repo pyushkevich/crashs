@@ -835,14 +835,14 @@ class FitLauncher:
         # to convert the ASHS output into an input suitable for CRASHS
         if args.skip_preproc is False:
             if template.get_preprocessing_mode() == 't2_alveus':
-                fn_preproc = f'{workspace.preproc_dir}/{id}/t2_alveus'
+                fn_preproc = f'{workspace.preproc_dir}/t2_alveus'
                 print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
                 upsampled_posterior_pattern = import_ashs_t2(cdr, ashs, template, fn_preproc, expid, device, 
                                                              skip_upsample_t2=args.no_t2_upsample, skip_add_wm_t1=args.no_wm_nnunet)
                 ashs.set_alternate_posteriors(upsampled_posterior_pattern)
                 ashs.load_posteriors(template)
             elif not have_wm and template.get_preprocessing_mode() == 't1_add_wm':
-                fn_preproc = f'{workspace.preproc_dir}/{id}/t1_add_wm'
+                fn_preproc = f'{workspace.preproc_dir}/t1_add_wm'
                 print("Performing ASHS-T1 preprocessing steps (add WM label)")
                 upsampled_posterior_pattern = add_wm_to_ashs_t1(cdr, ashs, template, fn_preproc, expid, device)
                 ashs.set_alternate_posteriors(upsampled_posterior_pattern)
