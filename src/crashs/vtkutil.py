@@ -61,79 +61,79 @@ class PyMeshLabInterface:
         os.remove(fn)
 
 # Read VTK mesh
-def load_vtk(filename):
+def load_vtk(filename) -> vtk.vtkPolyData:
     rd = vtk.vtkPolyDataReader()
     rd.SetFileName(filename)
     rd.Update()
     return rd.GetOutput()
 
 # Read points from the polydata
-def vtk_get_points(pd):
+def vtk_get_points(pd) -> np.ndarray:
     return vtk_to_numpy(pd.GetPoints().GetData())
 
 # Set points in the polydata
-def vtk_set_points(pd, x):
+def vtk_set_points(pd: vtk.vtkPolyData, x: np.ndarray):
     return pd.GetPoints().SetData(numpy_to_vtk(x))
 
 # Read the faces from the polydata
-def vtk_get_triangles(pd):
+def vtk_get_triangles(pd: vtk.vtkPolyData) -> np.ndarray:
     return vtk_to_numpy(pd.GetPolys().GetData()).reshape(-1,4)[:,1:]
 
 # Map all point arrays to cell arrays
-def vtk_all_point_arrays_to_cell_arrays(pd):
+def vtk_all_point_arrays_to_cell_arrays(pd: vtk.vtkPolyData) -> vtk.vtkPolyData:
     flt = vtk.vtkPointDataToCellData()
     flt.SetInputData(pd)
     flt.Update()
     return flt.GetOutput()
 
 # Get the names of all the point arrays
-def vtk_get_point_arrays(pd):
+def vtk_get_point_arrays(pd: vtk.vtkPolyData) -> list:
     x = pd.GetPointData()
     return [ x.GetArray(i).GetName() for i in range(x.GetNumberOfArrays()) ]
 
 # Read a point array
-def vtk_get_point_array(pd, name):
+def vtk_get_point_array(pd: vtk.vtkPolyData, name: str) -> np.ndarray:
     a = pd.GetPointData().GetArray(name)
     return vtk_to_numpy(a) if a is not None else None
 
 # Add a cell array to a mesh
-def vtk_set_point_array(pd, name, array, array_type=vtk.VTK_FLOAT):
+def vtk_set_point_array(pd: vtk.vtkPolyData, name: str, array: np.ndarray, array_type:int=vtk.VTK_FLOAT) -> vtk.vtkPolyData:
     a = numpy_to_vtk(array, array_type=array_type)
     a.SetName(name)
     pd.GetPointData().AddArray(a)
     return pd
 
 # Get the names of all the cell arrays
-def vtk_get_cell_arrays(pd):
+def vtk_get_cell_arrays(pd: vtk.vtkPolyData) -> list:
     x = pd.GetCellData()
     return [ x.GetArray(i).GetName() for i in range(x.GetNumberOfArrays()) ]
 
 # Read a cell array
-def vtk_get_cell_array(pd, name):
+def vtk_get_cell_array(pd: vtk.vtkPolyData, name: str) -> np.ndarray:
     a = pd.GetCellData().GetArray(name)
     return vtk_to_numpy(a) if a is not None else None
 
 # Add a cell array to a mesh
-def vtk_set_cell_array(pd, name, array):
+def vtk_set_cell_array(pd: vtk.vtkPolyData, name: str, array: np.ndarray) -> vtk.vtkPolyData:
     a = numpy_to_vtk(array)
     a.SetName(name)
     pd.GetCellData().AddArray(a)
     return pd
 
 # Set generic field data
-def vtk_set_field_data(pd, name, array):
+def vtk_set_field_data(pd: vtk.vtkPolyData, name: str, array: np.ndarray) -> vtk.vtkPolyData:
     a = numpy_to_vtk(array)
     a.SetName(name)
     pd.GetFieldData().AddArray(a)
     return pd
 
 # Get generic field data
-def vtk_get_field_data(pd, name):
+def vtk_get_field_data(pd: vtk.vtkPolyData, name: str) -> np.ndarray:
     a = pd.GetFieldData().GetArray(name)
     return vtk_to_numpy(a) if a is not None else None
 
 # Map a cell array to a point array
-def vtk_cell_array_to_point_array(pd, name):
+def vtk_cell_array_to_point_array(pd: vtk.vtkPolyData, name: str) -> None:
     cell_to_point = vtk.vtkCellDataToPointData()
     cell_to_point.SetInputData(pd)
     cell_to_point.PassCellDataOn()
@@ -141,7 +141,7 @@ def vtk_cell_array_to_point_array(pd, name):
     vtk_set_point_array(pd, name, vtk_get_point_array(cell_to_point.GetOutput(), name))
 
 # Make a VTK polydata from vertices and triangles
-def vtk_make_pd(v, f=None):
+def vtk_make_pd(v: np.ndarray, f: np.ndarray=None) -> vtk.vtkPolyData:
     pd = vtk.vtkPolyData()
     pts = vtk.vtkPoints()
     pts.SetData(numpy_to_vtk(v))
@@ -153,7 +153,7 @@ def vtk_make_pd(v, f=None):
     return pd
 
 # Clone an existing PD
-def vtk_clone_pd(pd):
+def vtk_clone_pd(pd : vtk.vtkPolyData) -> vtk.vtkPolyData:
     pd_clone = vtk.vtkPolyData()
     pd_clone.DeepCopy(pd)
     return pd_clone

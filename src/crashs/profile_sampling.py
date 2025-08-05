@@ -128,6 +128,51 @@ def laplacian_kernel(x, y, sigma=0.1):
     return (-D_ij.sqrt() / sigma).exp()
 
 
+def map_labels(img, x_img,
+               target_labels, 
+               source_labels, 
+               source_label_subset, 
+               x, b, rbf_kernel):
+    
+    # Extract the voxels matching the target labels
+    mask = np.isin(sitk.GetArrayFromImage(img), target_labels)
+    
+    # Handle special case of 1-1 mapping
+    if source_label_subset and len(source_label_subset) == 1:
+        x_img[mask != 0] = source_label_subset[0]
+        return
+    
+    # Get the non-zero pixel indices (ITK ordering)
+    nz = np.flip(np.transpose(np.stack(np.nonzero(mask)).astype(np.float32)), 1)
+    
+    # Convert to RAS physical coordinates
+    y = np.array([
+        img.TransformContinuousIndexToPhysicalPoint(nz[j,:].tolist()) for j in range(nz.shape[0])])
+    y = y @ np.diag([-1, -1, 1])
+    
+    # If source_labels specified, then limit b to only those labels
+    if source_label_subset:
+        source_label_index = [ p for p, l in enumerate(source_labels) if l in source_label_subset ]
+        source_labels = [ source_labels[i] for i in source_label_index ]
+        b_subset = b[:, source_label_index]
+    else:
+        b_subset = b
+    
+    # Perform RBF interpolation, so easy!
+    K_yx = laplacian_kernel(
+        torch.tensor(y, dtype=torch.float32), 
+        torch.tensor(x, dtype=torch.float32),
+        sigma=rbf_kernel)
+    b_y = (K_yx @ torch.tensor(b_subset, dtype=torch.float32)).detach().cpu().numpy()
+    
+    # Assign the values to the vertices
+    l_best = np.argmax(b_y, 1)
+    l_best_remap = np.zeros_like(l_best)
+    for k, label in enumerate(source_labels):
+        l_best_remap[l_best == k] = label
+    x_img[mask != 0] = l_best_remap
+    
+
 def do_mapping(args):
 
     # Load the template
@@ -148,46 +193,62 @@ def do_mapping(args):
         labels = vtk_get_field_data(pd_temp, f'{args.array}_labels')
         label_arr = [vtk_get_point_array(pd_temp, f'{args.array}_{i:03d}') for i in range(len(labels)+1)]
         label_map = np.stack(label_arr, axis = 2)
+        print('Labels in the profile sample file: ', labels)
+        print(len(labels), label_map.shape)
         
         # Organize the labels in the same order as the vertices
         b = label_map.transpose(1,0,2).reshape(-1, label_map.shape[2])
+        
+        # Drop NaNs from consideration (or should we treat them as having background label?)
+        nanmask = np.isnan(b.mean(1))
+        b = b[~nanmask, :]
+        x = x[~nanmask, :]
 
-    # Load the reference image
-    img = sitk.ReadImage(args.image, outputPixelType=sitk.sitkFloat32)
+        # Load the reference image
+        img = sitk.ReadImage(args.image, outputPixelType=sitk.sitkFloat32)
+        x_img = sitk.GetArrayFromImage(img)
 
-    # Extract pixels of interest
-    x_img = sitk.GetArrayFromImage(img)
+        # Limit to only requested labels if needed
+        if args.target_labels:
+            target_labels = args.target_labels
+        else:
+            target_labels = np.unique(x_img)
+            target_labels = target_labels[target_labels != 0]
+            target_labels = [ int(t) for t in target_labels ]
+            
+        print(f'Replacing target labels {target_labels} in the image {args.image}')
+        
+        # Check if the label hieararchy file was provided
+        label_hierarchy = {}
+        if args.hierachy:
+            with open(args.hierachy, 'rt') as f:
+                for line in f.readlines():
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split(',')
+                    source_label, target_label = int(parts[0]), int(parts[1])
+                    if target_label not in label_hierarchy:
+                        label_hierarchy[target_label] = []
+                    label_hierarchy[target_label].append(source_label)
+            print(f'Label hierarchy: {label_hierarchy}')
+                
+            # Perform mapping for each target label separately
+            for target_label, source_labels in label_hierarchy.items():
+                if target_label in target_labels:
+                    print(f'Mapping label {target_label} from source labels {source_labels}')
+                    map_labels(img, x_img, [target_label], labels, source_labels, x, b[:,:-1], args.rbf_kernel)
+                
+        else:
+            print(f'No label hierarchy provided, mapping all target labels {target_labels} from all source labels {list(labels)}')
+            map_labels(img, x_img, target_labels, labels, None, x, b[:,:-1], args.rbf_kernel)
 
-    # Limit to only requested labels if needed
-    if args.target_labels:
-        x_img = np.where(np.isin(x_img, args.target_labels), 1, 0)
-
-    # Get the non-zero pixel indices (ITK ordering)
-    nz = np.flip(np.transpose(np.stack(np.nonzero(x_img)).astype(np.float32)), 1)
-    
-    # Convert to RAS physical coordinates
-    y = np.array([
-        img.TransformContinuousIndexToPhysicalPoint(nz[j,:].tolist()) for j in range(nz.shape[0])])
-    y = y @ np.diag([-1, -1, 1])
-    
-    # Perform RBF interpolation, so easy!
-    K_yx = laplacian_kernel(
-        torch.tensor(y, dtype=torch.float32), 
-        torch.tensor(x, dtype=torch.float32),
-        sigma=args.rbf_kernel)
-    b_y = (K_yx @ torch.tensor(b, dtype=torch.float32)).detach().cpu().numpy()
-
-    # Assign the values to the vertices
-    l_best = np.argmax(b_y[:,:-1], 1)
-    l_best_remap = np.zeros_like(l_best)
-    for k, label in enumerate(labels):
-        l_best_remap[l_best == k] = label
-    x_img[x_img != 0] = l_best_remap
-
-    # Save the image
-    img_result = sitk.GetImageFromArray(x_img)
-    img_result.CopyInformation(img)
-    sitk.WriteImage(img_result, args.output)
+        # Save the image
+        img_result = sitk.GetImageFromArray(x_img)
+        img_result.CopyInformation(img)
+        sitk.WriteImage(img_result, args.output)
+    else:
+        raise ValueError('Currently only label mapping is supported (use --labels flag)')
 
 
 class ProfileSamplingLauncher:
@@ -246,6 +307,14 @@ class ProfileMappingLauncher:
         parse.add_argument('-T', '--target-labels', type=int, nargs='+',
                            help='List of labels that should be replaced in the reference image. '
                                 'By default, all non-zero labels are replaced.')
+        parse.add_argument('-H', '--hierachy', type=str,
+                           help='CSV file that describes the label hierarchy. '
+                                'The second column contains ids of the target labels in the image input. '
+                                'The first column contains the labels in the sampled data that should be mapped to the target labels. '
+                                'For example, if 1 is the label of the hippocampus in the input image, '
+                                'and 17, 53, and 70 are subfields of the hippocampus the file would contain pairs 17,1 ; 53,1 ; 70,1. '
+                                'When label hierarchy is provided, each target label can only '
+                                'be replaced by the labels that belong to it in the hierarchy.')
         parse.set_defaults(func = lambda args : self.run(args))
         
     def run(self, args):
