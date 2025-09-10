@@ -232,8 +232,10 @@ def postprocess_t2_upsample(
             label_order.append(label)
     label_order.append(template.get_labels_for_tissue_class('wm')[0])
 
+    # Compute the argmax of the posteriors
+    reps = ' '.join([ f'{i} {label}' for i, label in enumerate(label_order)])
     c3d.execute(f'-vote -popas S -push img_prob_wm -push S -int 0 -reslice-identity '
-                f'-push img_prob_wm -thresh 0.5 inf 255 0 -max -split ')
+                f'-push img_prob_wm -thresh 0.5 inf 255 0 -max -replace {reps} -popas ARGMAX -clear')
 
     # Ok, now we have a segmentation on the stack where we have all the bg/csf labels 
     # in consecutive order and a white matter label as 255. We want to propagate each
@@ -243,12 +245,17 @@ def postprocess_t2_upsample(
             cat_match = [ k for k in ['dg','cortex','suberc','ca'] if label in upsample_opts[f'{k}_labels'] ]
             cat = cat_match[0] if len(cat_match) > 0 else 'bg'
             pmap = 'img_prob_csf' if cat in ['bg','dg'] else 'img_prob_gm'
-            c3d.execute(f'-push {pmap}')
-    c3d.execute(f'-push img_prob_wm')
-    
-    # Compute softmax and an updated segmentation
-    c3d.execute(f'-foreach-comp {len(label_order)} -as P -thresh 0.5 inf 1 0 -times -insert P 1 '
-                f'-fast-marching 20 -reciprocal -endfor -foreach -scale 10 -endfor -softmax')
+            c3d.execute(f'-push {pmap} -as P -dup -thresh 0.5 inf 1 0 '
+                        f'-push ARGMAX -thresh {label} {label} 1 0 -times '
+                        f'-fast-marching 20 -reciprocal -scale 10')
+            
+    # Repeat the same for the white matter label
+    c3d.execute(f'-push img_prob_wm -as P -dup -thresh 0.5 inf 1 0 '
+                f'-push ARGMAX -thresh 255 255 1 0 -times '
+                f'-fast-marching 20 -reciprocal -scale 10')
+
+    # Compute softmax 
+    c3d.execute('-softmax')
     
     # We can now output the new posteriors for CRASHS to use.
     upsampled_posterior_pattern = f'{ws.dir_new_posteriors}/preproc_posterior_%03d.nii.gz'
@@ -256,9 +263,8 @@ def postprocess_t2_upsample(
         sitk.WriteImage(c3d.peek(i), upsampled_posterior_pattern % (label,))
 
     # Also combine the posteriors into a segmentation 
-    reps = ' '.join([ f'{i} {label}' for i, label in enumerate(label_order)])
     c3d.execute(f'-vote -replace {reps} -o {tmppref}_ivseg_ashs_upsample.nii.gz')
-    
+        
     # Finally, output the new posteriors
     return upsampled_posterior_pattern
 
