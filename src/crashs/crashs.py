@@ -21,7 +21,7 @@ from crashs.util import *
 from crashs.vtkutil import *
 from crashs.lddmm import *
 from crashs.omt import *
-from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1
+from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1, get_saved_alternate_posteriors
 from crashs.roi_integrate import integrate_over_rois
 
 # Routine to convert ASHS posterior probabilities to CRUISE inputs
@@ -835,22 +835,32 @@ class FitLauncher:
 
         # Determine if the current template requires additional postprocessing steps
         # to convert the ASHS output into an input suitable for CRASHS
-        if args.skip_preproc is False:
-            if template.get_preprocessing_mode() == 't2_alveus':
-                fn_preproc = f'{workspace.preproc_dir}/t2_alveus'
+        preproc_mode = template.get_preprocessing_mode()
+        if preproc_mode == 't2_alveus':
+            fn_preproc = f'{workspace.preproc_dir}/t2_alveus'
+            if args.skip_preproc is False:
                 print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
                 upsampled_posterior_pattern = import_ashs_t2(cdr, ashs, template, fn_preproc, expid, device, 
-                                                             skip_upsample_t2=args.no_t2_upsample, skip_add_wm_t1=args.no_wm_nnunet)
-                ashs.set_alternate_posteriors(upsampled_posterior_pattern)
-                ashs.load_posteriors(template)
-            elif not have_wm and template.get_preprocessing_mode() == 't1_add_wm':
-                fn_preproc = f'{workspace.preproc_dir}/t1_add_wm'
+                                                            skip_upsample_t2=args.no_t2_upsample, skip_add_wm_t1=args.no_wm_nnunet)
+            else:
+                upsampled_posterior_pattern = get_saved_alternate_posteriors(fn_preproc, expid)
+            print(f'Setting alternate posteriors for CRASHS from {fn_preproc}')    
+            ashs.set_alternate_posteriors(upsampled_posterior_pattern)
+            ashs.load_posteriors(template)
+            
+        elif not have_wm and preproc_mode == 't1_add_wm':
+            fn_preproc = f'{workspace.preproc_dir}/t1_add_wm'
+            if args.skip_preproc is False:
                 print("Performing ASHS-T1 preprocessing steps (add WM label)")
                 upsampled_posterior_pattern = add_wm_to_ashs_t1(cdr, ashs, template, fn_preproc, expid, device)
-                ashs.set_alternate_posteriors(upsampled_posterior_pattern)
-                ashs.load_posteriors(template)
-            elif not have_wm:
-                raise ValueError('ASHS folder missing white matter segmentation!')
+            else:
+                upsampled_posterior_pattern = get_saved_alternate_posteriors(fn_preproc, expid)
+
+            print(f'Setting alternate posteriors for CRASHS from {fn_preproc}')    
+            ashs.set_alternate_posteriors(upsampled_posterior_pattern)
+            ashs.load_posteriors(template)
+        elif not have_wm:
+            raise ValueError('ASHS folder missing white matter segmentation!')
 
         # Perform the import and CRUISE steps
         if args.skip_cruise is False:

@@ -408,6 +408,11 @@ def import_ashs_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, outp
     # and extend the white matter over the alveus
     upsampled_posterior_pattern = postprocess_t2_upsample(ashs, template, preproc_opts, ws)
     return upsampled_posterior_pattern
+
+
+def get_saved_alternate_posteriors(output_dir, id):
+    ws = PreprocessT2Workspace(output_dir, id)
+    return f'{ws.dir_new_posteriors}/preproc_posterior_%03d.nii.gz'
     
 
 def add_wm_to_ashs_t1(cdr: CrashsDataRoot, ashs:ASHSFolder, template:Template, output_dir, id, device):

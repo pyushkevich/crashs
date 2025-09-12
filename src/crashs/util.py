@@ -5,7 +5,7 @@ from picsl_c3d import Convert3D
 import os
 import glob
 import json
-import pkg_resources
+import importlib.resources
 import copy
 import shutil
 
@@ -93,10 +93,9 @@ class Template :
         self.root = template_dir
 
         # Load the default parameters from the json in CRASHS source tree
-        default_json_fn = pkg_resources.resource_filename('crashs', 'param/template_defaults.json')
+        default_json_fn = importlib.resources.files("crashs") / "param" / "template_defaults.json"
         print('Merged template parameters: ', default_json_fn)
-        with open(default_json_fn) as fn:
-            self.json = json.load(fn)
+        self.json = json.loads((default_json_fn).read_text())
 
         # Load the template-specific json
         local_json_fn = os.path.join(template_dir, 'template.json')
