@@ -100,13 +100,13 @@ def Shooting(p0, q0, K, nt=10, Integrator=RalstonIntegrator()):
     return Integrator(HamiltonianSystem(K), (p0, q0), nt)
 
 
-def Flow(x0, p0, q0, K, deltat=1.0, Integrator=RalstonIntegrator()):
+def Flow(x0, p0, q0, K, nt=10, deltat=1.0, Integrator=RalstonIntegrator()):
     HS = HamiltonianSystem(K)
 
     def FlowEq(x, p, q):
         return (K(x, q, p),) + HS(p, q)
 
-    return Integrator(FlowEq, (x0, p0, q0), deltat)[0]
+    return Integrator(FlowEq, (x0, p0, q0), nt, deltat)[0]
 
 
 def LDDMMloss(K, dataloss, nt=10, gamma=0):
