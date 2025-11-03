@@ -1,4 +1,5 @@
 import argparse
+import sys
 from crashs.df import HuggingFaceImporter
 from crashs.crashs import FitLauncher
 from crashs.build_template import BuildTemplateLauncher
@@ -6,9 +7,17 @@ from crashs.roi_integrate import ROILauncher
 from crashs.profile_sampling import ProfileSamplingLauncher, ProfileMappingLauncher
 from crashs.derive_template import DeriveTemplateLauncher
 
+banner = '' + \
+r'  ____ ____      _    ____  _   _ ____  ' + '\n' + \
+r' / ___|  _ \    / \  / ___|| | | / ___| ' + '\n' + \
+r'| |   | |_) |  / _ \ \___ \| |_| \___ \ ' + '\n' + \
+r'| |___|  _ <  / ___ \ ___) |  _  |___) |' + '\n' + \
+r' \____|_| \_\/_/   \_\____/|_| |_|____/ ' + '\n' + \
+r'CRASHS: Cortical reconstruction for ASHS' + '\n'
+
 # Create a parser
 parse = argparse.ArgumentParser(
-    prog="crashs", description="CRASHS: Cortical reconstruction for ASHS")
+    prog="crashs", description=banner, formatter_class=argparse.RawDescriptionHelpFormatter)
 
 # Add subparsers for the main commands
 sub = parse.add_subparsers(dest='command', help='sub-command help', required=True)
@@ -36,5 +45,7 @@ c_derive = DeriveTemplateLauncher(
     sub.add_parser('derive_template', help='Derive a new template from an existing one using a target geometry'))
 
 # Parse the arguments
-args = parse.parse_args()
+args = parse.parse_args(None if sys.argv[1:] else ['--help'])
+if hasattr(args, 'func'):
+    args = parse.parse_args()
 args.func(args)
