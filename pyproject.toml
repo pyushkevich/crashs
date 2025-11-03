@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "crashs"
-version = "0.2.15"
+version = "0.2.16"
 authors = [
   { name="Paul Yushkevich", email="pyushkevich@gmail.com" },
 ]
@@ -25,7 +25,8 @@ dependencies = [
   'nnunetv2>=2.3.1',
   'acvl_utils==0.2',
   'blosc2',
-  'huggingface_hub'
+  'python-gdcm==3.0.23.1',
+  'huggingface_hub==0.36.0'
 ]
 readme = "README.md"
 requires-python = ">=3.8"

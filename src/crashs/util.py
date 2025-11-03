@@ -8,6 +8,8 @@ import json
 import importlib.resources
 import copy
 import shutil
+import datetime
+
 
 from crashs.vtkutil import *
 
@@ -320,10 +322,12 @@ class Workspace:
         self.fit_dir = os.path.join(self.output_dir, 'fitting')
         self.thick_dir = os.path.join(self.output_dir, 'thickness')
         self.preproc_dir = os.path.join(self.output_dir, 'preprocess')
+        self.log_dir = os.path.join(self.output_dir, 'logs')
         os.makedirs(self.cruise_dir, exist_ok=True)
         os.makedirs(self.fit_dir, exist_ok=True)
         os.makedirs(self.thick_dir, exist_ok=True)
         os.makedirs(self.preproc_dir, exist_ok=True)
+        os.makedirs(self.log_dir, exist_ok=True)
 
         self.cruise_fn_base = f'{self.expid}_mtl'
         self.cruise_wm_prob = self.fn_cruise('wm_prob.nii.gz')
@@ -363,6 +367,12 @@ class Workspace:
 
     def fn_fit_profile_meshes(self):
         return glob.glob(self.fn_fit(f'fitted_omt_match_to_p??.vtk'))
+    
+    def fn_logfile(self, suffix=None):
+        if suffix is None:
+            # Create a suffix based on timestamp
+            suffix = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        return os.path.join(self.log_dir, f'{self.expid}_{suffix}.log')
 
 
 # Load the available label posteriors into a dictionary

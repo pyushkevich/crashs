@@ -14,6 +14,7 @@ import time
 import glob
 import SimpleITK as sitk
 import tempfile
+import logging
 from picsl_c3d import Convert3D
 from picsl_greedy import LMShoot3D
 from picsl_cmrep import cmrep_vskel, mesh_tetra_sample
@@ -23,6 +24,9 @@ from crashs.lddmm import *
 from crashs.omt import *
 from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1, get_saved_alternate_posteriors
 from crashs.roi_integrate import integrate_over_rois
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Routine to convert ASHS posterior probabilities to CRUISE inputs
 def ashs_output_to_cruise_input(template:Template, ashs: ASHSFolder, workspace: Workspace):
@@ -483,9 +487,11 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
         np.savetxt(workspace.affine_matrix, affine_mat)
 
     else:
+        logger.info('Starting similarity registration using lmshoot')
         affine_mat = similarity_registration_lmshoot(
             md_template_ds, md_subject_ds, workspace.affine_matrix, 
             n_iter=affine_iter, sigma_varifold=template.get_varifold_sigma())
+        logger.info('Finished similarity registration using lmshoot')
     
     # Apply the affine registration parameters to the two meshes
     md_subject.apply_transform(affine_mat)
@@ -519,6 +525,7 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
 
     else:
         # Perform the fitting
+        logger.info('Starting deformable registration using lmshoot')
         lddmm_fit_subject_jac_penalty_lmshoot(
             md_template, md_template_ds, md_subject_ds, 
             workspace.fit_lddmm_momenta, 
@@ -528,6 +535,7 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
             sigma_varifold=template.get_varifold_sigma(),
             gamma_lddmm=template.get_lddmm_gamma(),
             w_jac_penalty=template.get_jacobian_penalty())
+        logger.info('Finished deformable registration using lmshoot')
         
     # We now need to combine the affine and deformable components to bring the mesh
     # into the space of the subject
@@ -652,8 +660,10 @@ def omt_match_fitted_template_to_target(pd_fitted, pd_target, pd_target_native, 
 
     # Match the template to subject via OMT, i.e. every template vertex is mapped to somewhere on the
     # subject mesh, this fits more closely than LDDMM but might break topology
+    logging.info('Performing OMT matching between fitted template and subject mesh')
     _, w_omt = match_omt(md_fitted.vt, md_fitted.ft, md_target.vt, md_target.ft)
     v_omt, v_int, w_int = omt_match_to_vertex_weights(md_fitted.pd, md_target.pd, w_omt.detach().cpu().numpy())
+    logging.info('Completed OMT matching between fitted template and subject mesh')
 
     # Save the template OMT matched to the subject inflated mesh
     pd_omt = vtk_make_pd(v_omt, md_fitted.f)
@@ -684,8 +694,10 @@ def subject_to_template_fit_omt_keops(template:Template, workspace: Workspace, d
 
     # Propagate this fitted mesh through the levelset layers using OMT
     print(f'Propagating through level set {id}')
+    logger.info(f'Propagating through level set')
     img_ls = sitk.ReadImage(workspace.fn_cruise('mtl_layering-boundaries.nii.gz'))
     prof_meshes, mid_layer = profile_meshing_omt(img_ls, source_mesh=pd_omt_to_native, device=device)
+    logger.info(f'Done propagating through level set')
 
     # Get the sform for this subject
     sform = np.loadtxt(workspace.cruise_sform)
@@ -713,9 +725,13 @@ def subject_to_template_fit_omt_keops(template:Template, workspace: Workspace, d
     # Write distance statistics
     with open(workspace.fit_dist_stat, 'wt') as jsonfile:
         json.dump(dist_stat, jsonfile)
+        
+    logger.info(f'Wrote distance statistics to {workspace.fit_dist_stat}')
 
 
 def compute_thickness_stats(template: Template, ws: Workspace, pruning_geodesic_factor=1.6):
+
+    logging.info('Computing thickness statistics')
 
     # Generate the levelset from which we will compute the thickness data
     fn_gwb = ws.fn_cruise('mtl_cruise-gwb.nii.gz')
@@ -729,15 +745,24 @@ def compute_thickness_stats(template: Template, ws: Workspace, pruning_geodesic_
     vtk_apply_sform(pd_bnd, get_image_sform(img_levelset))
     save_vtk(pd_bnd, ws.thick_boundary)
 
+    logging.info(f'Saved thickness boundary mesh to {ws.thick_boundary}')
+
     # Apply a bit of smoothing to the mesh
     vs, fs = taubin_smooth(vtk_get_points(pd_bnd), vtk_get_triangles(pd_bnd), 0.5, -0.51, 40)
+    logging.info(f'Smoothed thickness boundary mesh: {vs.shape}, faces: {fs.shape}')
+
     pd_bnd_smooth = vtk_make_pd(vs, fs)
+    logging.info(f'Saving smoothed thickness boundary mesh, vertices: {vs.shape}, faces: {fs.shape}')
     save_vtk(pd_bnd_smooth, ws.thick_boundary_sm)
+
+    logging.info(f'Saved smoothed thickness boundary mesh to {ws.thick_boundary_sm}')
 
     # Compute the skeleton
     print('Calling cmrep_vskel with ')
     print(f'-e 2 -c 1 -p {pruning_geodesic_factor} -C -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
     cmrep_vskel(f'-e 2 -c 1 -p {pruning_geodesic_factor} -C -d {ws.thick_tetra_mesh} {ws.thick_boundary_sm} {ws.thick_skeleton}')
+
+    logging.info(f'Computed thickness skeleton saved to {ws.thick_skeleton}')
 
     # Sample the thickness from the tetrahedra onto the template grid
     print('Calling mesh_tetra_sample with ')
@@ -747,6 +772,8 @@ def compute_thickness_stats(template: Template, ws: Workspace, pruning_geodesic_
     mesh_tetra_sample(f'-d 1.0 -B -D SamplingDistance {ws.fit_omt_match_to_hw} '
                       f'{ws.thick_tetra_mesh} {ws.thick_result} VoronoiRadius')
     
+    logging.info(f'Computed thickness result saved to {ws.thick_result}')
+
     # Compute thickness summary measures
     integrate_over_rois(template, argparse.Namespace(
         subject=ws.expid, session=None, scan=None, side=ws.side,
@@ -822,7 +849,10 @@ class FitLauncher:
         # Create the output workspace
         expid = args.id if args.id is not None else os.path.basename(args.output_dir)
         workspace = Workspace(args.output_dir, expid, args.side)
-
+        
+        # Write a log for this CRASHS run
+        logging.basicConfig(filename=workspace.fn_logfile(), level=logging.INFO)
+        
         # Check if the white matter is present in ASHS
         have_wm = len([l for l in template.get_labels_for_tissue_class('wm') 
                        if l in ashs.posteriors.keys()]) > 0

@@ -25,6 +25,62 @@ git clone https://github.com/pyushkevich/crashs
 pip install -e ./crashs
 ```
 
+### Example installation (Ubuntu)
+Our [Docker script](Dockerfile) may provide hints on installing `nighres` and `crashs` on a modern Ubuntu system.
+
+
+### Example installation on a cluster (PMACS)
+This installation uses miniconda which is the preferred way of managing packages on this cluster. We create a new conda environment and install Nighres and CRASHS into this environment. Notice that a Java JDK is loaded through `module` command. 
+```sh
+# If rebuilding the environment 
+### conda remove --name test_crashs_install --all
+
+# Create new conda virtual environment (Python 3.12 is key here!)
+conda create --name test_crashs_install python=3.12
+conda activate test_crashs_install
+
+# Make sure you have JDK module loaded
+module load jdk/zulu-jdk8.0.181
+which java            # Should say /appl/zulu-jdk8.0.181/bin/java
+
+# Install JCC and other Nighres dependencies
+export JCC_JDK=/appl/zulu-jdk8.0.181
+conda install jcc wheel setuptools
+
+# Also make sure that we have decent GCC
+module load gcc/12.2.0
+
+# Download and build nighres
+cd my_crashs_install_dir
+git clone https://github.com/nighres/nighres
+cd nighres
+./build.sh            # If you get errors on this step, and try to change your config (JDK version) 
+                      # delete the nighres dir and clone it again; otherwise cached compiled files
+                      # will give you trouble when building
+pip install .
+pip list              # should say nighres 1.5.2 or sth, also nibabel and other libs
+
+# Test if nighres actually works
+python -c 'import nighres'
+
+# Install pymeshlab - another that gives problems
+conda install -y pymeshlab imagecodecs
+
+# Fix broken huggingface dependency (will be corrected in future CRASHS code)
+conda install -y huggingface_hub==0.36.0
+
+# Fix incompatible GDCM (will be corrected in future CRASHS code)
+pip install python-gdcm==3.0.23.1
+
+# Install crashs (use latest version)
+pip install crashs
+
+# Check that crashs runs correctly
+python -m crashs
+```
+
+
+
 ## Installation using Docker
 The CRASHS Docker container is available on DockerHub as `pyushkevich/crashs:latest`. Use the command below to download the container.
 
@@ -170,5 +226,19 @@ The options starting with `--skip` are used to skip certain steps when re-runnin
 
 * PA Yushkevich, L Xie, LEM Wisse, et al., Mapping Medial Temporal Lobe Longitudinal Change in Preclinical Alzheimer’s Disease, 2023 Alzheimer's Association International Conference (AAIC 2023).
 
+## Troubleshooting
 
-    
+If you get intermittent crashes, particularly in parallel environments, try setting the following environment variables before running CRASHS:
+
+```sh
+# Use a dedicated cache folder for PyKeops. This prevents parallel
+# jobs from writing to the same cache folder concurrently. This will
+# result in a small performance hit, and is really meant for clusters.
+# (replace /scratch with your preferred temp directory)
+export KEOPS_CACHE_FOLDER=$(mktemp -d /scratch/keops_cache_XXXXXX)
+
+# This fixed a hard to track down double-free bug somewhere in the optimal
+# mass transport code that would occur only some of the time and only when
+# using the CPU. The bug is still lurking there somewhere...
+export PYTHONMALLOC=malloc
+```

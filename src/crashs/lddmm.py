@@ -261,43 +261,6 @@ def rotation_from_vector(x):
     return R
 
 
-# Now we need to initialize the labeling of the sphere. We can try directly to use OMT to 
-# match the sphere to each of the meshes and maybe that's going to be good enough for getting
-# the initial label distributions. If not, have to deform
-def to_measure(points, triangles):
-    """Turns a triangle into a weighted point cloud."""
-
-    # Our mesh is given as a collection of ABC triangles:
-    A, B, C = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
-
-    # Locations and weights of our Dirac atoms:
-    X = (A + B + C) / 3  # centers of the faces
-    S = torch.sqrt(torch.sum(torch.cross(B - A, C - A) ** 2, dim=1)) / 2  # areas of the faces
-
-    # We return a (normalized) vector of weights + a "list" of points
-    return S / torch.sum(S), X
-
-
-# Compute optimal transport matching
-def match_omt(vs, fs, vt, ft):
-    """Match two triangle meshes using optimal mesh transport."""
-    (a_src, x_src) = to_measure(vs, fs)
-    (a_trg, x_trg) = to_measure(vt, ft)
-    x_src.requires_grad_(True)
-    x_trg.requires_grad_(True)
-
-    # Generate correspondence between models using OMT
-    t_start = time.time()
-    w_loss = geomloss.SamplesLoss("sinkhorn", p=2, blur=0.05, scaling=0.8, backend='multiscale', verbose=True)
-    w_loss_value = w_loss(a_src, x_src, a_trg, x_trg)
-    [w_loss_grad] = torch.autograd.grad(w_loss_value, x_src)
-    w_match = x_src - w_loss_grad / a_src[:, None]
-    t_end = time.time()
-
-    print(f'OMT matching distance: {w_loss_value.item()}, time elapsed: {t_end-t_start}')
-    return w_loss_value, w_match
-
-
 # Define a function that can fit a model to a population
 def fit_model_to_population(md_root, md_targets, n_iter = 10, nt = 10,
                             sigma_lddmm=5, sigma_root=20, sigma_varifold=5, 
