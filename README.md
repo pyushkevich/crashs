@@ -32,8 +32,14 @@ Our [Docker script](Dockerfile) may provide hints on installing `nighres` and `c
 ### Example installation on a cluster (PMACS)
 This installation uses miniconda which is the preferred way of managing packages on this cluster. We create a new conda environment and install Nighres and CRASHS into this environment. Notice that a Java JDK is loaded through `module` command. 
 ```sh
-# If rebuilding the environment 
+# If rebuilding the environment, run command below
 ### conda remove --name test_crashs_install --all
+
+# Check that conda forge is enabled as one of your channels;
+# if not, execute the two commands commented out below
+conda config --show channels
+### conda config --add channels conda-forge
+### conda config --set channel_priority strict
 
 # Create new conda virtual environment (Python 3.12 is key here!)
 conda create --name test_crashs_install python=3.12
@@ -75,11 +81,12 @@ pip install python-gdcm==3.0.23.1
 # Install crashs (use latest version)
 pip install crashs
 
-# Check that crashs runs correctly
+# Check that crashs runs correctly 
+python -c 'from crashs.crashs import *'
+
+# You are now ready to run CRASHS
 python -m crashs
 ```
-
-
 
 ## Installation using Docker
 The CRASHS Docker container is available on DockerHub as `pyushkevich/crashs:latest`. Use the command below to download the container.
@@ -241,4 +248,10 @@ export KEOPS_CACHE_FOLDER=$(mktemp -d /scratch/keops_cache_XXXXXX)
 # mass transport code that would occur only some of the time and only when
 # using the CPU. The bug is still lurking there somewhere...
 export PYTHONMALLOC=malloc
+```
+
+If you get an error `ImportError: cannot import name 'crashs_main' from 'crashs'`, it's likely due to a missing/misconfigured package that CRASHS depends on. Use the command below to get more detailed information. 
+
+```sh
+python -c 'from crashs.crashs import *'
 ```
