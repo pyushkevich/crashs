@@ -117,13 +117,13 @@ docker run \
 Before using CRASHS, you will need to download the templates and pretrained models. The models are stored on HuggingFace at https://huggingface.co/datasets/pyushkevich/crashs_template_package, and can be downloaded to a folder on your filesystem (in the example below, `/my/crashs/folder/crashs_template_package`) using:
 
 ```sh
-python crashs download /my/crashs/folder/crashs_template_package
+python3 -m crashs download /my/crashs/folder/crashs_template_package
 ```
 
 If running inside of the Docker container, the command is:
 
 ```sh
-python crashs download /package
+python3 -m crashs download /package
 ```
 
 The same command can be used in the future to update the template package to the latest version. It is convenienet to set the environment variable `CRASHS_DATA` to point to the folder where the package was downloaded: 
