@@ -27,6 +27,10 @@ RUN ln -s $JAVA_HOME /usr/lib/jvm/temurin-17-jdk-amd64
 RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install jcc
 
+# Install Nighres dependencies. For some strange reason, pip ignores these dependencies
+# when trying to install Nighres using setuptools
+RUN python3 -m pip install 'psutil==5.9.0' 'antspyx<=0.5.2'
+
 # Clone the nighres repository
 RUN git clone https://github.com/nighres/nighres
 
