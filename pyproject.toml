@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "crashs"
-version = "0.2.16"
+version = "0.2.17"
 authors = [
   { name="Paul Yushkevich", email="pyushkevich@gmail.com" },
 ]
 description = "CRASHS: Cortical Reconstruction for Automated Segmentation of Hippocampal Subfields (ASHS)"
 dependencies = [
   'numpy',
-  'torch',
+  'torch>=2.0',
   'pykeops',
   'pymeshlab',
   'vtk',
