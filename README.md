@@ -156,7 +156,9 @@ Run this command inside of the container to run CRASHS on the example T1-ASHS se
 ```sh
 python3 -m crashs fit \
     -C /package -s right -c corr_usegray \
-    sample_data/ashs_pmc_t1/subj01/ashs ashs_pmc_t1 /sample_data/ashs_pmc_t1/subj01/crashs
+    sample_data/ashs_pmc_t1/subj01/ashs \
+    ashs_pmc_t1 \
+    sample_data/ashs_pmc_t1/subj01/crashs
 ```
 
 You should find the output from running CRASHS in folder `/my/crashs/folder/sample_data/ashs_pmc_t1/subj01` on your system.
