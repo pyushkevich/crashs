@@ -51,7 +51,7 @@ def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessWorkspace
     for i, f in enumerate(use_folds):
         f = int(f) if f != 'all' else f
         checkpoint = torch.load(join(nnunet_model, f'fold_{f}', 'checkpoint_final.pth'),
-                                map_location=torch.device('cpu'))
+                                map_location=torch.device('cpu'), weights_only=False)
         if i == 0:
             configuration_name = checkpoint['init_args']['configuration']
             inference_allowed_mirroring_axes = checkpoint['inference_allowed_mirroring_axes'] if \
