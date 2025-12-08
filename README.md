@@ -53,7 +53,7 @@ which java            # Should say /appl/zulu-jdk8.0.181/bin/java
 export JCC_JDK=/appl/zulu-jdk8.0.181
 conda install jcc wheel setuptools
 
-# Also make sure that we have decent GCC
+# Also make sure that we have decent GCC (SKIP ON RHEL9 PMACS CLUSTER)
 module load gcc/12.2.0
 
 # Download and build nighres
@@ -69,20 +69,20 @@ pip list              # should say nighres 1.5.2 or sth, also nibabel and other 
 # Test if nighres actually works
 python -c 'import nighres'
 
+# If only nighres installed but not the other packages (nibabel, antspyx) - run next line
+### pip install 'numpy<2.0' 'nibabel' 'psutil>=5.9.0' 'antspyx<=0.5.2' 'matplotlib<=3.7' 'dipy>=1.5.0' scipy
+
 # Install pymeshlab - another that gives problems
 conda install -y pymeshlab imagecodecs
-
-# Fix broken huggingface dependency (will be corrected in future CRASHS code)
-conda install -y huggingface_hub==0.36.0
-
-# Fix incompatible GDCM (will be corrected in future CRASHS code)
-pip install python-gdcm==3.0.23.1
 
 # Install crashs (use latest version)
 pip install crashs
 
 # Check that crashs runs correctly 
 python -c 'from crashs.crashs import *'
+
+# On PMACS RHEL 9 cluster, if you get a FIPS/OpenSSL error, run this command:
+### pip uninstall pydicom
 
 # You are now ready to run CRASHS
 python -m crashs
