@@ -3,9 +3,13 @@ import numpy as np
 import torch
 import time
 import geomloss
+import logging
 import SimpleITK as sitk
 from torch.autograd import grad
 from crashs.vtkutil import *
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Now we need to initialize the labeling of the sphere. We can try directly to use OMT to 
 # match the sphere to each of the meshes and maybe that's going to be good enough for getting
@@ -22,26 +26,6 @@ def to_measure(points, triangles):
 
     # We return a (normalized) vector of weights + a "list" of points
     return S / torch.sum(S), X
-
-
-# Compute optimal transport matching
-def match_omt_old_deleteme(vs, fs, vt, ft):
-    """Match two triangle meshes using optimal mesh transport."""
-    (a_src, x_src) = to_measure(vs, fs)
-    (a_trg, x_trg) = to_measure(vt, ft)
-    x_src.requires_grad_(True)
-    x_trg.requires_grad_(True)
-
-    # Generate correspondence between models using OMT
-    t_start = time.time()
-    w_loss = geomloss.SamplesLoss("sinkhorn", p=2, blur=0.05, scaling=0.8, backend='multiscale', verbose=True)
-    w_loss_value = w_loss(a_src, x_src, a_trg, x_trg)
-    [w_loss_grad] = torch.autograd.grad(w_loss_value, x_src)
-    w_match = x_src - w_loss_grad / a_src[:, None]
-    t_end = time.time()
-
-    print(f'OMT matching distance: {w_loss_value.item()}, time elapsed: {t_end-t_start}')
-    return w_loss_value, w_match
 
 
 # Match two measures using optimal mass transport, with normalization to diameter 1 sphere
@@ -92,6 +76,7 @@ def match_omt(vs, fs, vt, ft, normalize=True, **kwargs):
 
     # Compu
     print(f'OMT-match, {len(x_src)} -> {len(x_trg)}, L={loss:8.7f}, elapsed {t_elapsed:4.2f}')
+    logger.info(f'OMT-match, {len(x_src)} -> {len(x_trg)}, L={loss:8.7f}, elapsed {t_elapsed:4.2f}')
     return loss, w_match
 
 
@@ -199,6 +184,7 @@ def profile_meshing_omt(img_levelset, device, source_mesh=None, init_layer=None,
         trg_layer.v_match, _, _ = omt_match_to_vertex_weights(
             pd_flow, trg_layer.pd, trg_layer.f_match.detach().cpu().numpy())
         t_elapsed = time.time() - t_start
+        logger.info(f'OMT-prop layer {k:02d}, {len(x_flow)} -> {len(trg_layer.x)}, L={loss:8.7f}, elapsed {t_elapsed:4.2f}')
         print(f'OMT-prop layer {k:02d}, {len(x_flow)} -> {len(trg_layer.x)}, L={loss:8.7f}, elapsed {t_elapsed:4.2f}')
         return trg_layer.f_match
 

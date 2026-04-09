@@ -25,6 +25,69 @@ git clone https://github.com/pyushkevich/crashs
 pip install -e ./crashs
 ```
 
+### Example installation (Ubuntu)
+Our [Docker script](Dockerfile) may provide hints on installing `nighres` and `crashs` on a modern Ubuntu system.
+
+
+### Example installation on a cluster (PMACS)
+This installation uses miniconda which is the preferred way of managing packages on this cluster. We create a new conda environment and install Nighres and CRASHS into this environment. Notice that a Java JDK is loaded through `module` command. 
+```sh
+# If rebuilding the environment, run command below
+### conda remove --name test_crashs_install --all
+
+# Check that conda forge is enabled as one of your channels;
+# if not, execute the two commands commented out below
+conda config --show channels
+### conda config --add channels conda-forge
+### conda config --set channel_priority strict
+
+# Create new conda virtual environment (Python 3.12 is key here!)
+conda create --name test_crashs_install python=3.12
+conda activate test_crashs_install
+
+# Make sure you have JDK module loaded
+module load jdk/zulu-jdk8.0.181
+which java            # Should say /appl/zulu-jdk8.0.181/bin/java
+
+# Install JCC and other Nighres dependencies
+export JCC_JDK=/appl/zulu-jdk8.0.181
+conda install jcc wheel setuptools
+
+# Also make sure that we have decent GCC (SKIP ON RHEL9 PMACS CLUSTER)
+module load gcc/12.2.0
+
+# Download and build nighres
+cd my_crashs_install_dir
+git clone https://github.com/nighres/nighres
+cd nighres
+./build.sh            # If you get errors on this step, and try to change your config (JDK version) 
+                      # delete the nighres dir and clone it again; otherwise cached compiled files
+                      # will give you trouble when building
+pip install .
+pip list              # should say nighres 1.5.2 or sth, also nibabel and other libs
+
+# Test if nighres actually works
+python -c 'import nighres'
+
+# If only nighres installed but not the other packages (nibabel, antspyx) - run next line
+### pip install 'numpy<2.0' 'nibabel' 'psutil>=5.9.0' 'antspyx<=0.5.2' 'matplotlib<=3.7' 'dipy>=1.5.0' scipy
+
+# Install pymeshlab - another that gives problems
+conda install -y pymeshlab imagecodecs
+
+# Install crashs (use latest version)
+pip install crashs
+
+# Check that crashs runs correctly 
+python -c 'from crashs.crashs import *'
+
+# On PMACS RHEL 9 cluster, if you get a FIPS/OpenSSL error, run this command:
+### pip uninstall pydicom
+
+# You are now ready to run CRASHS
+python -m crashs
+```
+
 ## Installation using Docker
 The CRASHS Docker container is available on DockerHub as `pyushkevich/crashs:latest`. Use the command below to download the container.
 
@@ -54,13 +117,13 @@ docker run \
 Before using CRASHS, you will need to download the templates and pretrained models. The models are stored on HuggingFace at https://huggingface.co/datasets/pyushkevich/crashs_template_package, and can be downloaded to a folder on your filesystem (in the example below, `/my/crashs/folder/crashs_template_package`) using:
 
 ```sh
-python crashs download /my/crashs/folder/crashs_template_package
+python3 -m crashs download /my/crashs/folder/crashs_template_package
 ```
 
 If running inside of the Docker container, the command is:
 
 ```sh
-python crashs download /package
+python3 -m crashs download /package
 ```
 
 The same command can be used in the future to update the template package to the latest version. It is convenienet to set the environment variable `CRASHS_DATA` to point to the folder where the package was downloaded: 
@@ -93,7 +156,9 @@ Run this command inside of the container to run CRASHS on the example T1-ASHS se
 ```sh
 python3 -m crashs fit \
     -C /package -s right -c corr_usegray \
-    /sample_data/ashs_pmc_t1/subj01/ashs ashs_pmc_t1 /sample_data/ashs_pmc_t1/subj01/crashs
+    sample_data/ashs_pmc_t1/subj01/ashs \
+    ashs_pmc_t1 \
+    sample_data/ashs_pmc_t1/subj01/crashs
 ```
 
 You should find the output from running CRASHS in folder `/my/crashs/folder/sample_data/ashs_pmc_t1/subj01` on your system.
@@ -170,5 +235,25 @@ The options starting with `--skip` are used to skip certain steps when re-runnin
 
 * PA Yushkevich, L Xie, LEM Wisse, et al., Mapping Medial Temporal Lobe Longitudinal Change in Preclinical Alzheimer’s Disease, 2023 Alzheimer's Association International Conference (AAIC 2023).
 
+## Troubleshooting
 
-    
+If you get intermittent crashes, particularly in parallel environments, try setting the following environment variables before running CRASHS:
+
+```sh
+# Use a dedicated cache folder for PyKeops. This prevents parallel
+# jobs from writing to the same cache folder concurrently. This will
+# result in a small performance hit, and is really meant for clusters.
+# (replace /scratch with your preferred temp directory)
+export KEOPS_CACHE_FOLDER=$(mktemp -d /scratch/keops_cache_XXXXXX)
+
+# This fixed a hard to track down double-free bug somewhere in the optimal
+# mass transport code that would occur only some of the time and only when
+# using the CPU. The bug is still lurking there somewhere...
+export PYTHONMALLOC=malloc
+```
+
+If you get an error `ImportError: cannot import name 'crashs_main' from 'crashs'`, it's likely due to a missing/misconfigured package that CRASHS depends on. Use the command below to get more detailed information. 
+
+```sh
+python -c 'from crashs.crashs import *'
+```
