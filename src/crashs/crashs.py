@@ -70,6 +70,7 @@ def run_cruise(workspace:Workspace, template:Template, overwrite=False):
     out_dir, fn_base = workspace.cruise_dir, workspace.cruise_fn_base
 
     # Correct the topology of the white matter segmentation
+    print(f'RUNNING TOPOLOGY CORRECTION')
     corr = nighres.shape.topology_correction(
         image=cortex['inside_mask'],
         shape_type='binary_object',
