@@ -34,14 +34,14 @@ class MeshData:
             self.v = np.einsum('ij,kj->ki', transform[:3,:3], self.v) + transform[:3,3]
 
         self.device = device
-        self.vt = torch.tensor(self.v, dtype=torch.float32, device=device).contiguous()
-        self.ft = torch.tensor(self.f, dtype=torch.long, device=device).contiguous()
-        self.lpt = torch.tensor(self.lp, dtype=torch.float32, device=device).contiguous()
+        self.vt = torch.from_numpy(self.v).to(dtype=torch.float32, device=device).contiguous()
+        self.ft = torch.from_numpy(self.f).to(dtype=torch.long, device=device).contiguous()
+        self.lpt = torch.from_numpy(self.lp).to(dtype=torch.float32, device=device).contiguous()
 
     def apply_transform(self, transform):
         vtk_apply_sform(self.pd, transform)
         self.v = vtk_get_points(self.pd)
-        self.vt = torch.tensor(self.v, dtype=torch.float32, device=self.device).contiguous()
+        self.vt = torch.from_numpy(self.v).to(dtype=torch.float32, device=self.device).contiguous()
 
     def export(self, fn):
         pd_reduced = vtk_make_pd(self.v, self.f)

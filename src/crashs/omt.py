@@ -178,10 +178,10 @@ def profile_meshing_omt(img_levelset, device, source_mesh=None, init_layer=None,
                                   scaling=0.8, diameter=1.0)
 
     # Higher-level propagation command
-    def flow(pd_flow, a_flow, x_flow, trg_layer):
+    def flow(pd_flow, a_flow, x_flow, trg_layer, k):
         t_start = time.time()
         loss, trg_layer.f_match = omt_match_measures(
-            w_loss, a_flow, x_flow, trg_layer.a, trg_layer.x, normalize=True)
+            w_loss, np.maximum(a_flow, 1e-6), x_flow, trg_layer.a, trg_layer.x, normalize=True)
         trg_layer.v_match, _, _ = omt_match_to_vertex_weights(
             pd_flow, trg_layer.pd, trg_layer.f_match.detach().cpu().numpy())
         t_elapsed = time.time() - t_start
@@ -193,7 +193,7 @@ def profile_meshing_omt(img_levelset, device, source_mesh=None, init_layer=None,
     if source_mesh:
         source_layer = Layer(source_mesh)
         pd_flow, a_flow = source_layer.pd, source_layer.a
-        x_flow_init = flow(pd_flow, a_flow, source_layer.x, layers[init_layer])
+        x_flow_init = flow(pd_flow, a_flow, source_layer.x, layers[init_layer],-1)
     else:
         layers[init_layer].f_match = layers[init_layer].x
         layers[init_layer].v_match = layers[init_layer].v.detach().cpu().numpy()
@@ -205,7 +205,7 @@ def profile_meshing_omt(img_levelset, device, source_mesh=None, init_layer=None,
     for seq in seq1, seq2:
         x_flow = x_flow_init
         for k in seq:
-            x_flow = flow(pd_flow, a_flow, x_flow, layers[k])
+            x_flow = flow(pd_flow, a_flow, x_flow, layers[k], k)
 
     # If there is a source mesh, match it to target
     """

@@ -327,15 +327,15 @@ def vtk_get_interpolation_arrays_for_sample(pd_src, x_samples):
 
     cellId = vtk.reference(0)
     c = [0.0, 0.0, 0.0]
+    c2 = [0.0, 0.0, 0.0]
     subId = vtk.reference(0)
     d = vtk.reference(0.0)
     pcoord = [0.0, 0.0, 0.0]
     wgt = [0.0, 0.0, 0.0]
-    xj = [0.0, 0.0, 0.0]
     for j in range(x_samples.shape[0]):
         loc.FindClosestPoint(x_samples[j,:], c, cellId, subId, d)
         cell = pd_src.GetCell(cellId)
-        cell.EvaluatePosition(x_samples[j,:], c, subId, pcoord, d, wgt)
+        cell.EvaluatePosition(c, c2, subId, pcoord, d, wgt)
         for i, w in enumerate(wgt):
             v_res[j,i], w_res[j,i] = cell.GetPointId(i), w
 
