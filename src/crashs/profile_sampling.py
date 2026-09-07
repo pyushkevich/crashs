@@ -7,7 +7,6 @@ import json
 import pathlib
 import SimpleITK as sitk
 import torch
-from pykeops.torch import LazyTensor
 from crashs.util import Workspace
 from crashs.vtkutil import *
 
@@ -122,6 +121,7 @@ def do_sampling(args):
 
 
 def laplacian_kernel(x, y, sigma=0.1):
+    from pykeops.torch import LazyTensor
     x_i = LazyTensor(x[:, None, :])  # (M, 1, 1)
     y_j = LazyTensor(y[None, :, :])  # (1, N, 1)
     D_ij = ((x_i - y_j) ** 2).sum(-1)  # (M, N) symbolic matrix of squared distances

@@ -1,0 +1,101 @@
+# Builds crashs as platform-specific binary wheels bundling a GraalVM Native Image
+# shared library (compiled from cbstools-public Java sources) - no JDK/JVM required by
+# end users. Modeled on picsl_greedy's cibuildwheel-based build_wheels.yml.
+name: Build wheels
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_pypi:
+        type: boolean
+        description: 'Upload wheels to PyPI?'
+        required: false
+        default: false
+  release:
+    types:
+      - published
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14-large, macos-14, windows-2022]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # Provides native-image on PATH for the macOS/Windows legs, which run natively
+      # (not containerized) so a host-level install is visible to cibuildwheel. The Linux
+      # leg runs inside a manylinux Docker container and installs its own GraalVM inside
+      # native/scripts/build_native.sh instead - see that script for why.
+      - name: Set up GraalVM
+        if: ${{ !startsWith(matrix.os, 'ubuntu') }}
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '21'
+          distribution: 'graalvm'
+
+      - name: Set up MSVC environment
+        if: ${{ startsWith(matrix.os, 'windows') }}
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.20.0
+        env:
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_ARCHS_WINDOWS: AMD64
+          CIBW_SKIP: "*musllinux* pp*"
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_BEFORE_ALL: bash native/scripts/build_native.sh ${{ matrix.os }}
+          CIBW_ENVIRONMENT: >
+            CBSTOOLS_NATIVE_BUILD_DIR=/project/native/build
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >
+            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            auditwheel repair -w {dest_dir} {wheel}
+          CIBW_BEFORE_BUILD_WINDOWS: >
+            pip install delvewheel
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >
+            delvewheel repair -w {dest_dir} {wheel}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+
+  make_sdist:
+    name: Make SDist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build SDist
+        run: pipx run build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist/*.tar.gz
+
+  upload_all:
+    needs: [build_wheels, make_sdist]
+    environment: pypi
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'release' && github.event.action == 'published') || (github.event_name == 'workflow_dispatch' && inputs.release_pypi)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

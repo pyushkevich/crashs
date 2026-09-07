@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import nighres
 import torch
 import SimpleITK as sitk
 import numpy as np
@@ -8,7 +7,6 @@ import os
 import argparse
 import json
 import pathlib
-import geomloss
 import subprocess
 import time
 import glob
@@ -24,6 +22,7 @@ from crashs.lddmm import *
 from crashs.omt import *
 from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1, get_saved_alternate_posteriors
 from crashs.roi_integrate import integrate_over_rois
+from crashs import _native
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -59,6 +58,41 @@ def ashs_output_to_cruise_input(template:Template, ashs: ASHSFolder, workspace: 
     sitk.WriteImage(largest_component_binary_image, workspace.cruise_wm_mask)
 
 
+# Helper: read a scalar NIfTI/image file into an (nx,ny,nz) numpy array (matching the
+# axis order cbstools-public's native entry points expect) plus the source sitk.Image
+# (kept around for header/spacing/direction information when writing outputs back out).
+# SimpleITK's GetArrayFromImage returns (z,y,x)-ordered data, so it's transposed here to
+# (x,y,z) - the same axis order nighres got for free from nibabel's get_fdata().
+def _read_xyz(filename):
+    img = sitk.ReadImage(filename)
+    data = sitk.GetArrayFromImage(img).transpose(2, 1, 0)
+    return data, img
+
+
+# Helper: write an (nx,ny,nz) numpy array back out as a NIfTI, copying the header
+# (spacing/origin/direction) from a reference image of the same spatial dimensions.
+def _write_xyz(data, ref_img, filename):
+    img = sitk.GetImageFromArray(np.ascontiguousarray(data.transpose(2, 1, 0)))
+    img.CopyInformation(ref_img)
+    sitk.WriteImage(img, filename)
+
+
+# Helper: write a 4D (nx,ny,nz,nt) numpy array (e.g. per-layer boundary levelsets) as a
+# true 4D NIfTI, matching the shape nighres/nibabel used to produce (and what
+# build_template.py's profile_meshing_omt expects to read back via sitk with a 4th axis).
+def _write_xyzt(data4d, ref_img3d, filename):
+    arr = np.ascontiguousarray(np.transpose(data4d, (3, 2, 1, 0)))
+    img4d = sitk.GetImageFromArray(arr)
+    sp3, org3 = ref_img3d.GetSpacing(), ref_img3d.GetOrigin()
+    dir3 = np.array(ref_img3d.GetDirection()).reshape(3, 3)
+    img4d.SetSpacing(sp3 + (1.0,))
+    img4d.SetOrigin(org3 + (0.0,))
+    dir4 = np.eye(4)
+    dir4[:3, :3] = dir3
+    img4d.SetDirection(tuple(dir4.flatten()))
+    sitk.WriteImage(img4d, filename)
+
+
 # Routine to run CRUISE on an example
 def run_cruise(workspace:Workspace, template:Template, overwrite=False):
 
@@ -70,72 +104,54 @@ def run_cruise(workspace:Workspace, template:Template, overwrite=False):
         'background_proba': workspace.cruise_bg_prob
         }
 
-    # Append to fn_base for the CRUISE outputs (format consistent with earlier code)
-    out_dir, fn_base = workspace.cruise_dir, workspace.cruise_fn_base
+    # Load inputs
+    wm_mask_data, ref_img = _read_xyz(cortex['inside_mask'])
+    wm_proba_data, _ = _read_xyz(cortex['inside_proba'])
+    gm_proba_data, _ = _read_xyz(cortex['region_proba'])
+    bg_proba_data, _ = _read_xyz(cortex['background_proba'])
+    resolution = ref_img.GetSpacing()
 
     # Correct the topology of the white matter segmentation
-    corr = nighres.shape.topology_correction(
-        image=cortex['inside_mask'],
-        shape_type='binary_object',
-        propagation='background->object',
-        save_data=True,
-        output_dir=out_dir,
-        file_name=fn_base)
+    corr = _native.topology_correction(
+        wm_mask_data, resolution, shape_type='binary_object',
+        propagation='background->object')
 
     # Use topology-preserving levelset to flow white matter to gray matter
-    cruise = nighres.cortex.cruise_cortex_extraction(
-        init_image=corr['object'],
-        wm_image=cortex['inside_proba'],
-        gm_image=cortex['region_proba'],
-        csf_image=cortex['background_proba'],
-        normalize_probabilities=True,
-        save_data=True,
-        file_name=fn_base,
-        output_dir=out_dir)
+    cruise = _native.cruise_cortex_extraction(
+        corr['object'], wm_proba_data, gm_proba_data, bg_proba_data, resolution,
+        normalize_probabilities=True)
+
+    # Persist the levelsets consumed by later pipeline stages (build_template.py etc.)
+    _write_xyz(cruise['gwb'], ref_img, workspace.fn_cruise('mtl_cruise-gwb.nii.gz'))
+    _write_xyz(cruise['cgb'], ref_img, workspace.fn_cruise('mtl_cruise-cgb.nii.gz'))
 
     # Extract average surface, grey-white surface and grey-csf surface as meshes
     cortical_surface = {}
     for lset in ('avg', 'cgb', 'gwb'):
-        cortical_surface[lset] = nighres.surface.levelset_to_mesh(
-            levelset_image=cruise[lset],
-            save_data=True,
-            overwrite=overwrite,
-            file_name=f'{fn_base}_{lset}.vtk',
-            output_dir=out_dir)
+        mesh = _native.levelset_to_mesh(cruise[lset], resolution)
+        cortical_surface[lset] = mesh
+        save_vtk(vtk_make_pd(mesh['points'], mesh['faces']),
+                 workspace.fn_cruise(f'mtl_{lset}_l2m-mesh.vtk'))
 
-    # Inflate the average surface 
-    inflated_surface = nighres.surface.surface_inflation(
-        surface_mesh=cortical_surface['avg']['result'],
-        save_data=True,
-        file_name=f'{fn_base}_avg.vtk',
-        output_dir=out_dir, 
-        overwrite=overwrite,
+    # Inflate the average surface
+    inflated = _native.surface_inflation(
+        cortical_surface['avg']['points'], cortical_surface['avg']['faces'],
         step_size=0.1,
-        max_iter=template.get_cruise_inflate_maxiter(), 
+        max_iter=template.get_cruise_inflate_maxiter(),
         method='area',
         regularization=1.0)
+    save_vtk(vtk_make_pd(inflated['points'], inflated['faces']), workspace.cruise_infl_mesh)
 
     # Compute cortical layering - this will be used later to extract meshes at different profiles
-    depth = nighres.laminar.volumetric_layering(
-                            inner_levelset=cruise['gwb'],
-                            outer_levelset=cruise['cgb'],
-                            n_layers=template.get_cruise_laminar_n_layers(),
-                            method=template.get_cruise_laminar_method(),
-                            save_data=True,
-                            overwrite=overwrite,
-                            file_name=fn_base,
-                            output_dir=out_dir)
+    depth = _native.volumetric_layering(
+        cruise['gwb'], cruise['cgb'], resolution,
+        n_layers=template.get_cruise_laminar_n_layers(),
+        method=template.get_cruise_laminar_method())
+    _write_xyzt(depth['boundaries'], ref_img, workspace.fn_cruise('mtl_layering-boundaries.nii.gz'))
 
     # Generate corresponding surfaces at different layers
     """
     # No longer used - profile meshing happens using OMT after the template is fit
-    profile_meshing = nighres.laminar.profile_meshing(
-                            profile_surface_image=depth['boundaries'],
-                            starting_surface_mesh=cortical_surface['avg']['result'],
-                            save_data=True,
-                            overwrite=overwrite,
-                            file_name=f'{fn_base}.vtk',
-                            output_dir=out_dir)
     """
 
 
