@@ -100,12 +100,26 @@ javac -d "$BUILD/classes" -cp "$CLASSPATH" -sourcepath "$CBS:$NATIVE_DIR/java/sr
 # --- 3. native-image --shared: AOT-compile to a shared library, no reflection/JNI config -----
 # --- needed (all 5 classes and their call chains are confirmed reflection/JNI/thread-free) ---
 
+# On macOS, native-image's final link step (via the system `cc`) embeds the *build host's*
+# OS version as the dylib's minimum target (e.g. minos 14.0 on a macos-14 runner) - setting
+# the MACOSX_DEPLOYMENT_TARGET env var does NOT get forwarded by native-image, so it has no
+# effect. delocate-wheel then refuses to repair the wheel because the bundled dylib's minos
+# (14.0) exceeds the wheel's declared minimum (macosx_11_0, cibuildwheel's arm64 floor - Apple
+# Silicon never shipped below macOS 11). Fix: pass -mmacosx-version-min directly to the linker.
+EXTRA_NATIVE_IMAGE_ARGS=()
+case "$OS_TAG" in
+    macos-*)
+        EXTRA_NATIVE_IMAGE_ARGS+=("-H:NativeLinkerOption=-mmacosx-version-min=11.0")
+        ;;
+esac
+
 "$NATIVE_IMAGE" --shared \
   -H:Name=libcbstools_native \
   -H:Path="$BUILD/out" \
   -cp "$BUILD/classes:$CLASSPATH" \
   --gc=serial \
-  --no-fallback
+  --no-fallback \
+  "${EXTRA_NATIVE_IMAGE_ARGS[@]}"
 
 echo "Native library built at: $BUILD/out/"
 ls -la "$BUILD/out/"
