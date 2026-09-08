@@ -16,7 +16,7 @@ CBSTOOLS_NATIVE_BUILD_DIR = {env = "CBSTOOLS_NATIVE_BUILD_DIR", default = ""}
 
 [project]
 name = "crashs"
-version = "0.2.17"
+version = "0.3.0-alpha.1"
 authors = [
   { name="Paul Yushkevich", email="pyushkevich@gmail.com" },
 ]
