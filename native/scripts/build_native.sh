@@ -25,7 +25,24 @@ mkdir -p "$BUILD/classes" "$BUILD/out"
 
 # --- 1. Ensure a GraalVM JDK with native-image is on PATH ------------------------------------
 
-if ! command -v native-image >/dev/null 2>&1; then
+# On Windows, GraalVM's native-image is shipped as "native-image.cmd". Git-bash's PATH lookup
+# (unlike cmd.exe/PowerShell, which consult %PATHEXT%) only resolves bare/`.exe` names, so
+# `command -v native-image` reports "not found" even when the GraalVM bin dir (containing
+# native-image.cmd) is correctly on PATH. Resolve the actual command name up front and use it
+# everywhere below instead of assuming the extension-less "native-image".
+find_native_image() {
+    for cand in native-image native-image.cmd native-image.exe; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+NATIVE_IMAGE="$(find_native_image || true)"
+
+if [ -z "$NATIVE_IMAGE" ]; then
     case "$OS_TAG" in
         ubuntu-*)
             # Running inside a manylinux container during cibuildwheel's Linux leg -
@@ -35,6 +52,7 @@ if ! command -v native-image >/dev/null 2>&1; then
             mkdir -p /tmp/graalvm && tar xzf /tmp/graalvm.tar.gz -C /tmp/graalvm --strip-components=1
             export GRAALVM_HOME=/tmp/graalvm
             export PATH="$GRAALVM_HOME/bin:$PATH"
+            NATIVE_IMAGE="$(find_native_image || true)"
             ;;
         macos-*)
             # macOS cibuildwheel runs natively (not containerized); expect the workflow's
@@ -53,7 +71,12 @@ if ! command -v native-image >/dev/null 2>&1; then
     esac
 fi
 
-echo "Using: $(native-image --version | head -1)"
+if [ -z "$NATIVE_IMAGE" ]; then
+    echo "native-image could not be located even after setup" >&2
+    exit 1
+fi
+
+echo "Using: $("$NATIVE_IMAGE" --version | head -1)"
 
 # --- 2. Compile: the 5 needed cbstools-public core classes (javac -sourcepath pulls in only ---
 # --- their actual transitive dependencies - NOT a directory-wide compile, which would also ---
@@ -77,7 +100,7 @@ javac -d "$BUILD/classes" -cp "$CLASSPATH" -sourcepath "$CBS:$NATIVE_DIR/java/sr
 # --- 3. native-image --shared: AOT-compile to a shared library, no reflection/JNI config -----
 # --- needed (all 5 classes and their call chains are confirmed reflection/JNI/thread-free) ---
 
-native-image --shared \
+"$NATIVE_IMAGE" --shared \
   -H:Name=libcbstools_native \
   -H:Path="$BUILD/out" \
   -cp "$BUILD/classes:$CLASSPATH" \
