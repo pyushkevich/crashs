@@ -2,7 +2,6 @@
 import numpy as np
 import torch
 import time
-import geomloss
 import logging
 import SimpleITK as sitk
 from torch.autograd import grad
@@ -58,8 +57,9 @@ def omt_match_measures(w_loss, a_src, x_src, a_trg, x_trg, normalize=True):
 
 def match_omt(vs, fs, vt, ft, normalize=True, **kwargs):
     """Match two triangle meshes using optimal mesh transport."""
+    import geomloss
 
-    # Convert the meshes to measures 
+    # Convert the meshes to measures
     (a_src, x_src) = to_measure(vs, fs)
     (a_trg, x_trg) = to_measure(vt, ft)
 
@@ -144,7 +144,8 @@ def profile_meshing_omt_old_slow(img_levelset, device, source_mesh=None, init_la
 
 
 def profile_meshing_omt(img_levelset, device, source_mesh=None, init_layer=None, edge_len_pct=1.0):
-    
+    import geomloss
+
     # An internal data structure for layers
     class Layer:
         def __init__(self, pd):

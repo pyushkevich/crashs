@@ -2,12 +2,11 @@
 import numpy as np
 import torch
 import time
-import geomloss
-from pykeops.torch import Vi, Vj
 from torch.autograd import grad
 
 # For LDDMM
 def GaussKernel(sigma):
+    from pykeops.torch import Vi, Vj
     x, y, b = Vi(0, 3), Vj(1, 3), Vj(2, 3)
     gamma = 1 / (sigma * sigma)
     D2 = x.sqdist(y)
@@ -16,6 +15,7 @@ def GaussKernel(sigma):
 
 # For Varifold
 def GaussLinKernel(sigma):
+    from pykeops.torch import Vi, Vj
     x, y, u, v, b = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3), Vj(4, 1)
     gamma = 1 / (sigma * sigma)
     D2 = x.sqdist(y)
@@ -24,6 +24,7 @@ def GaussLinKernel(sigma):
 
 # For Varifold
 def GaussLinKernelWithLabels(sigma, nlabels):
+    from pykeops.torch import Vi, Vj
     x, y, u, v, lx, ly, b = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3), Vi(4, nlabels), Vj(5, nlabels), Vj(6, 1)
     gamma = 1 / (sigma * sigma)
     D2 = x.sqdist(y)
@@ -32,6 +33,7 @@ def GaussLinKernelWithLabels(sigma, nlabels):
 
 # For Currents
 def GaussLinCurrentsKernel(sigma):
+    from pykeops.torch import Vi, Vj
     x, y, u, v = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3)
     gamma = 1 / (sigma * sigma)
     D2 = x.sqdist(y)
@@ -40,6 +42,7 @@ def GaussLinCurrentsKernel(sigma):
 
 # For Currents
 def GaussLinCurrentsKernelWithLabels(sigma, nlabels):
+    from pykeops.torch import Vi, Vj
     x, y, u, v, lx, ly = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3), Vi(4, 5), Vj(5, 5)
     gamma = 1 / (sigma * sigma)
     D2 = x.sqdist(y)
@@ -48,6 +51,7 @@ def GaussLinCurrentsKernelWithLabels(sigma, nlabels):
 
 # For Currents to match C++ code
 def GaussLinCurrentsKernelC(sigma):
+    from pykeops.torch import Vi, Vj
     x, y, u, v = Vi(0, 3), Vj(1, 3), Vi(2, 3), Vj(3, 3)
     gamma = 1 / (2 * sigma * sigma)
     D2 = x.sqdist(y)

@@ -19,3 +19,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Additional attribution and ShareAlike terms (third-party code)
+
+This MIT license covers the CRASHS source code in this repository. CRASHS's
+distributed package also includes a compiled native library derived from
+cbstools-public (Copyright (c) 2016 Max Planck Institute for Human Cognitive and
+Brain Sciences), which is licensed under Creative Commons Attribution-ShareAlike
+4.0 International (CC BY-SA 4.0), not MIT. That derivative work remains subject
+to CC BY-SA 4.0's attribution and share-alike terms. See THIRD_PARTY_LICENSES.md
+for the full license text, what was and wasn't modified, and attribution details.
