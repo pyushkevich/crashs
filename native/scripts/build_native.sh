@@ -104,22 +104,32 @@ javac -d "$BUILD/classes" -cp "$CLASSPATH" -sourcepath "$CBS:$NATIVE_DIR/java/sr
 # OS version as the dylib's minimum target (e.g. minos 14.0 on a macos-14 runner) - setting
 # the MACOSX_DEPLOYMENT_TARGET env var does NOT get forwarded by native-image, so it has no
 # effect. delocate-wheel then refuses to repair the wheel because the bundled dylib's minos
-# (14.0) exceeds the wheel's declared minimum (macosx_11_0, cibuildwheel's arm64 floor - Apple
-# Silicon never shipped below macOS 11). Fix: pass -mmacosx-version-min directly to the linker.
+# doesn't match the wheel's declared minimum - which differs by architecture: cibuildwheel's
+# floor is macosx_11_0 for arm64 (Apple Silicon never shipped below macOS 11) but macosx_10_9
+# for x86_64. Fix: pass -mmacosx-version-min directly to the linker, matching the actual
+# build host's architecture (macos-14 = arm64, macos-14-large = x86_64).
 EXTRA_NATIVE_IMAGE_ARGS=()
 case "$OS_TAG" in
     macos-*)
-        EXTRA_NATIVE_IMAGE_ARGS+=("-H:NativeLinkerOption=-mmacosx-version-min=11.0")
+        if [ "$(uname -m)" = "arm64" ]; then
+            MACOS_MIN=11.0
+        else
+            MACOS_MIN=10.9
+        fi
+        EXTRA_NATIVE_IMAGE_ARGS+=("-H:NativeLinkerOption=-mmacosx-version-min=$MACOS_MIN")
         ;;
 esac
 
+# ${EXTRA_NATIVE_IMAGE_ARGS[@]+"${EXTRA_NATIVE_IMAGE_ARGS[@]}"} (not the plain
+# "${EXTRA_NATIVE_IMAGE_ARGS[@]}"): older bash (e.g. manylinux's bash 4.2) treats expanding
+# an empty array as an unbound variable under `set -u`, even though it was declared above.
 "$NATIVE_IMAGE" --shared \
   -H:Name=libcbstools_native \
   -H:Path="$BUILD/out" \
   -cp "$BUILD/classes:$CLASSPATH" \
   --gc=serial \
   --no-fallback \
-  "${EXTRA_NATIVE_IMAGE_ARGS[@]}"
+  ${EXTRA_NATIVE_IMAGE_ARGS[@]+"${EXTRA_NATIVE_IMAGE_ARGS[@]}"}
 
 echo "Native library built at: $BUILD/out/"
 ls -la "$BUILD/out/"
