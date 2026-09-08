@@ -82,7 +82,7 @@ def _write_xyz(data, ref_img, filename):
 # build_template.py's profile_meshing_omt expects to read back via sitk with a 4th axis).
 def _write_xyzt(data4d, ref_img3d, filename):
     arr = np.ascontiguousarray(np.transpose(data4d, (3, 2, 1, 0)))
-    img4d = sitk.GetImageFromArray(arr)
+    img4d = sitk.GetImageFromArray(arr, isVector=False)
     sp3, org3 = ref_img3d.GetSpacing(), ref_img3d.GetOrigin()
     dir3 = np.array(ref_img3d.GetDirection()).reshape(3, 3)
     img4d.SetSpacing(sp3 + (1.0,))

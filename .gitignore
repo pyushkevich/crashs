@@ -182,3 +182,6 @@ src/crashs/_native_data/
 # otherwise swallow them.
 !native/java/lib/
 !native/java/lib/*.jar
+
+# VIM
+.*.swp

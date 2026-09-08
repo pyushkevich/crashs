@@ -3,90 +3,62 @@ CRASHS is a surface-based modeling and groupwise registration pipeline for the h
 
 ![CRASHS overview figure](docs/source/_static/fig_crashs_overview_adni_paper.png "CRASHS overview figure")
 
-Some of the newer ASHS atlases include the white matter label, which is used by CRASHS. For other ASHS atlases, CRASHS can paint in the white matter label using [nnU-Net](https://github.com/MIC-DKFZ/nnUNet). CRASHS uses the [CRUISE](https://doi.org/10.1016/j.neuroimage.2004.06.043) technique implemented in the [NighRes software](https://nighres.readthedocs.io/en/latest/) to fit the white matter segmentation with a surface of spherical topology, and find a series of surfaces spanning between the gray/white boundary and the pial surface. The middle surface is inflated and registered to a population template, allowing surface-based analysis of MTL cortical thickness and other measures such as functional MRI and diffusion MRI. 
+Some of the newer ASHS atlases include the white matter label, which is used by CRASHS. For other ASHS atlases, CRASHS can paint in the white matter label using [nnU-Net](https://github.com/MIC-DKFZ/nnUNet). CRASHS uses the [CRUISE](https://doi.org/10.1016/j.neuroimage.2004.06.043) technique to fit the white matter segmentation with a surface of spherical topology, and find a series of surfaces spanning between the gray/white boundary and the pial surface. The middle surface is inflated and registered to a population template, allowing surface-based analysis of MTL cortical thickness and other measures such as functional MRI and diffusion MRI.
+
+CRUISE and the other surface-processing algorithms CRASHS uses are implemented in Java as part of the [CBS Tools](https://github.com/piloubazin/cbstools-public) library developed by Pierre-Louis Bazin and colleagues at the Max Planck Institute for Human Cognitive and Brain Sciences. CRASHS calls this code directly via a small native binding (compiled ahead-of-time with [GraalVM Native Image](https://www.graalvm.org/latest/reference-manual/native-image/), no Java runtime required at install or run time) rather than through the [NighRes](https://nighres.readthedocs.io/en/latest/) software, which previously required a separate Java/JCC build step that could not be installed with `pip`. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for attribution and license details for this bundled code.
 
 The CRASHS pipeline is described in the supplemental material to our paper in the special issue of Alzheimer's and Dementia on the [20th anniversary of ADNI](https://doi.org/10.1002/alz.14161).
 
 ## Installation using `pip`
 
-CRASHS requires the `nighres` package, which cannot be installed with `pip`. To install `nighres`, please follow the [installation instructions](https://nighres.readthedocs.io/en/latest/).
+As of the version in this repository, CRASHS no longer depends on `nighres` or a
+separately-installed Java/JVM. The cbstools algorithms CRASHS needs are compiled
+ahead-of-time (via GraalVM Native Image) into a native library that ships inside the
+`crashs` package itself.
 
-Once `nighres` is installed, you can install CRASHS:
+Once binary wheels are published to PyPI, installing CRASHS requires no Java, JDK, or
+compiler of any kind — just:
 
 ```sh
 pip install crashs
 python3 -m crashs --help
 ```
 
-Or, if you want to use the latest development code and install in "editable" mode:
+### Installing from source (development / editable install)
+
+Building from source *does* require a JDK — specifically a
+[GraalVM JDK](https://www.graalvm.org/downloads/) with the `native-image` component
+(GraalVM for JDK 21+ ships this by default) — but only at build time, not at runtime
+or for end users installing a published wheel.
 
 ```sh
-git clone https://github.com/pyushkevich/crashs
-pip install -e ./crashs
+# Clone with submodules (native/cbstools-public is a git submodule)
+git clone --recurse-submodules https://github.com/pyushkevich/crashs
+cd crashs
+
+# Build the native library once (requires a GraalVM JDK with native-image on PATH)
+bash native/scripts/build_native.sh macos-14   # or: ubuntu-latest, windows-2022
+
+# Regular (non-editable) install picks up the native library correctly:
+pip install .
+```
+
+Note: `pip install -e .` (editable install) currently does **not** work for this
+package, because the compiled native library is only copied into the installed
+package location, not back into the source tree that an editable install imports
+from. For local development, build once as above, then manually stage the artifact
+into the source tree before installing editable:
+
+```sh
+mkdir -p src/crashs/_native_lib src/crashs/_native_data
+cp native/build/out/libcbstools_native.* src/crashs/_native_lib/
+cp -r native/data/topology_lut src/crashs/_native_data/
+pip install -e .
 ```
 
 ### Example installation (Ubuntu)
-Our [Docker script](Dockerfile) may provide hints on installing `nighres` and `crashs` on a modern Ubuntu system.
-
-
-### Example installation on a cluster (PMACS)
-This installation uses miniconda which is the preferred way of managing packages on this cluster. We create a new conda environment and install Nighres and CRASHS into this environment. Notice that a Java JDK is loaded through `module` command. 
-```sh
-# If rebuilding the environment, run command below
-### conda remove --name test_crashs_install --all
-
-# Check that conda forge is enabled as one of your channels;
-# if not, execute the two commands commented out below
-conda config --show channels
-### conda config --add channels conda-forge
-### conda config --set channel_priority strict
-
-# Create new conda virtual environment (Python 3.12 is key here!)
-conda create --name test_crashs_install python=3.12
-conda activate test_crashs_install
-
-# Make sure you have JDK module loaded
-module load jdk/zulu-jdk8.0.181
-which java            # Should say /appl/zulu-jdk8.0.181/bin/java
-
-# Install JCC and other Nighres dependencies
-export JCC_JDK=/appl/zulu-jdk8.0.181
-conda install jcc wheel setuptools
-
-# Also make sure that we have decent GCC (SKIP ON RHEL9 PMACS CLUSTER)
-module load gcc/12.2.0
-
-# Download and build nighres
-cd my_crashs_install_dir
-git clone https://github.com/nighres/nighres
-cd nighres
-./build.sh            # If you get errors on this step, and try to change your config (JDK version) 
-                      # delete the nighres dir and clone it again; otherwise cached compiled files
-                      # will give you trouble when building
-pip install .
-pip list              # should say nighres 1.5.2 or sth, also nibabel and other libs
-
-# Test if nighres actually works
-python -c 'import nighres'
-
-# If only nighres installed but not the other packages (nibabel, antspyx) - run next line
-### pip install 'numpy<2.0' 'nibabel' 'psutil>=5.9.0' 'antspyx<=0.5.2' 'matplotlib<=3.7' 'dipy>=1.5.0' scipy
-
-# Install pymeshlab - another that gives problems
-conda install -y pymeshlab imagecodecs
-
-# Install crashs (use latest version)
-pip install crashs
-
-# Check that crashs runs correctly 
-python -c 'from crashs.crashs import *'
-
-# On PMACS RHEL 9 cluster, if you get a FIPS/OpenSSL error, run this command:
-### pip uninstall pydicom
-
-# You are now ready to run CRASHS
-python -m crashs
-```
+Our [Docker script](Dockerfile) may provide hints on installing `crashs` and its
+dependencies on a modern Ubuntu system.
 
 ## Installation using Docker
 The CRASHS Docker container is available on DockerHub as `pyushkevich/crashs:latest`. Use the command below to download the container.
