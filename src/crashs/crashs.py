@@ -22,7 +22,7 @@ from crashs.lddmm import *
 from crashs.omt import *
 from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1, get_saved_alternate_posteriors
 from crashs.roi_integrate import integrate_over_rois
-from crashs import _native
+import crashs_cbstools_bindings as _native
 
 # Configure logger
 logger = logging.getLogger(__name__)

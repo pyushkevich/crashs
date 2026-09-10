@@ -5,55 +5,29 @@ CRASHS is a surface-based modeling and groupwise registration pipeline for the h
 
 Some of the newer ASHS atlases include the white matter label, which is used by CRASHS. For other ASHS atlases, CRASHS can paint in the white matter label using [nnU-Net](https://github.com/MIC-DKFZ/nnUNet). CRASHS uses the [CRUISE](https://doi.org/10.1016/j.neuroimage.2004.06.043) technique to fit the white matter segmentation with a surface of spherical topology, and find a series of surfaces spanning between the gray/white boundary and the pial surface. The middle surface is inflated and registered to a population template, allowing surface-based analysis of MTL cortical thickness and other measures such as functional MRI and diffusion MRI.
 
-CRUISE and the other surface-processing algorithms CRASHS uses are implemented in Java as part of the [CBS Tools](https://github.com/piloubazin/cbstools-public) library developed by Pierre-Louis Bazin and colleagues at the Max Planck Institute for Human Cognitive and Brain Sciences. CRASHS calls this code directly via a small native binding (compiled ahead-of-time with [GraalVM Native Image](https://www.graalvm.org/latest/reference-manual/native-image/), no Java runtime required at install or run time) rather than through the [NighRes](https://nighres.readthedocs.io/en/latest/) software, which previously required a separate Java/JCC build step that could not be installed with `pip`. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for attribution and license details for this bundled code.
+CRUISE and the other surface-processing algorithms CRASHS uses are implemented in Java as part of the [CBS Tools](https://github.com/piloubazin/cbstools-public) library developed by Pierre-Louis Bazin and colleagues at the Max Planck Institute for Human Cognitive and Brain Sciences. CRASHS reaches this code through [crashs-cbstools-bindings](https://github.com/pyushkevich/crashs-cbstools-bindings), a separate package that AOT-compiles it with [GraalVM Native Image](https://www.graalvm.org/latest/reference-manual/native-image/) (no Java runtime required at install or run time) and exposes it via `ctypes` — rather than through the [NighRes](https://nighres.readthedocs.io/en/latest/) software, which previously required a separate Java/JCC build step that could not be installed with `pip`. See that package's [THIRD_PARTY_LICENSES.md](https://github.com/pyushkevich/crashs-cbstools-bindings/blob/main/THIRD_PARTY_LICENSES.md) for attribution and license details for that code.
 
 The CRASHS pipeline is described in the supplemental material to our paper in the special issue of Alzheimer's and Dementia on the [20th anniversary of ADNI](https://doi.org/10.1002/alz.14161).
 
 ## Installation using `pip`
 
-As of the version in this repository, CRASHS no longer depends on `nighres` or a
-separately-installed Java/JVM. The cbstools algorithms CRASHS needs are compiled
-ahead-of-time (via GraalVM Native Image) into a native library that ships inside the
-`crashs` package itself.
-
-Once binary wheels are published to PyPI, installing CRASHS requires no Java, JDK, or
-compiler of any kind — just:
+CRASHS no longer depends on `nighres` or a separately-installed Java/JVM. The one
+compiled dependency it has — [crashs-cbstools-bindings](https://github.com/pyushkevich/crashs-cbstools-bindings),
+which wraps a handful of cbstools-public algorithms — ships as its own prebuilt binary
+wheel, so installing (or developing) CRASHS itself is pure Python, no Java/JDK/compiler
+involved at all:
 
 ```sh
 pip install crashs
 python3 -m crashs --help
 ```
 
-### Installing from source (development / editable install)
-
-Building from source *does* require a JDK — specifically a
-[GraalVM JDK](https://www.graalvm.org/downloads/) with the `native-image` component
-(GraalVM for JDK 21+ ships this by default) — but only at build time, not at runtime
-or for end users installing a published wheel.
+Or, if you want to use the latest development code and install in "editable" mode
+(a normal, instant editable install — no build step, no fussing with Java):
 
 ```sh
-# Clone with submodules (native/cbstools-public is a git submodule)
-git clone --recurse-submodules https://github.com/pyushkevich/crashs
-cd crashs
-
-# Build the native library once (requires a GraalVM JDK with native-image on PATH)
-bash native/scripts/build_native.sh macos-14   # or: ubuntu-latest, windows-2022
-
-# Regular (non-editable) install picks up the native library correctly:
-pip install .
-```
-
-Note: `pip install -e .` (editable install) currently does **not** work for this
-package, because the compiled native library is only copied into the installed
-package location, not back into the source tree that an editable install imports
-from. For local development, build once as above, then manually stage the artifact
-into the source tree before installing editable:
-
-```sh
-mkdir -p src/crashs/_native_lib src/crashs/_native_data
-cp native/build/out/libcbstools_native.* src/crashs/_native_lib/
-cp -r native/data/topology_lut src/crashs/_native_data/
-pip install -e .
+git clone https://github.com/pyushkevich/crashs
+pip install -e ./crashs
 ```
 
 ### Example installation (Ubuntu)

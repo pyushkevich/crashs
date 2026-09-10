@@ -1,18 +1,6 @@
 [build-system]
-requires = ["scikit-build-core"]
-build-backend = "scikit_build_core.build"
-
-[tool.scikit-build]
-cmake.source-dir = "native"
-wheel.packages = ["src/crashs"]
-
-[tool.scikit-build.cmake.define]
-# No default here: CMake is invoked from a temp build directory, so a relative default
-# would resolve against the wrong working directory. CIBW_ENVIRONMENT sets this to an
-# absolute path in CI; for a local `pip install .` leave it unset and CMakeLists.txt
-# falls back to `${CMAKE_CURRENT_SOURCE_DIR}/build` (i.e. native/build), which is
-# always correct relative to the actual source tree.
-CBSTOOLS_NATIVE_BUILD_DIR = {env = "CBSTOOLS_NATIVE_BUILD_DIR", default = ""}
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "crashs"
@@ -34,6 +22,7 @@ dependencies = [
   'picsl_c3d>=1.4.2.1',
   'picsl_greedy>=0.0.5',
   'picsl_cmrep>=1.0.4.0',
+  'crashs-cbstools-bindings>=0.1.0',
   'nnunetv2>=2.3.1',
   'acvl_utils==0.2',
   'blosc2',
