@@ -9,13 +9,14 @@ import matplotlib.pyplot as plt
 from scipy.special import softmax
 from sklearn.decomposition import PCA
 from crashs.vtkutil import *
+from crashs.meshlab import PyMeshLabInterface
 from crashs.lddmm import *
 from crashs.omt import *
 from crashs.util import MeshData, Template, ASHSFolder, Workspace, CrashsDataRoot
 from crashs.crashs import ashs_output_to_cruise_input, run_cruise, cruise_postproc
 from crashs.crashs import omt_match_fitted_template_to_target
 from crashs.preprocess_t2 import import_ashs_t2, add_wm_to_ashs_t1
-
+import pandas as pd
 
 # Workspace for building the template
 class TemplateBuildWorkspace:
@@ -68,12 +69,6 @@ class TemplateBuildWorkspace:
     def fn_affine_matrix(self, id:str):
         return os.path.join(self.affine_dir(), f'affine_{id}.mat')
 
-    def fn_template_build_mesh(self, iter:int):
-        return os.path.join(self.iter_dir(iter), f'template_iter_{iter}.vtk')
-    
-    def fn_template_build_tosubj(self, iter:int, id:str):
-        return os.path.join(self.iter_dir(iter), f'template_{iter}_to_{id}.vtk')
-    
     def fn_final_fitted_mesh(self, id:str):
         return os.path.join(self.final_dir(), f'template_fitted_{id}.vtk')
     
@@ -305,10 +300,9 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
     md_aff = { id: MeshData(load_vtk(tbs.fn_affine_mesh(id)), device) for id,_ in tbs.get_subjects() }
 
     # Generate a sphere
-    ms = pymeshlab.MeshSet()
-    ms.create_sphere(subdiv = 4)
-    m0 = ms.mesh(0)
-    v_sph, f_sph = m0.vertex_matrix(), m0.face_matrix()
+    ms = PyMeshLabInterface.create_meshset()
+    PyMeshLabInterface.create_sphere(ms, subdiv=4)
+    v_sph, f_sph = PyMeshLabInterface.get_mesh_vf(ms)
     pd_sph = vtk_make_pd(v_sph, f_sph)
     pd_sph = vtk_set_cell_array(pd_sph, 'plab', np.zeros((f_sph.shape[0],1)))
     md_sph = MeshData(pd_sph, device)
@@ -339,10 +333,7 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
         # Apply transformation to the sphere
         x = md_sph.vt
         y = (A @ x.T).T + b
-        L = 0
-        for i, (id,v) in enumerate(md_aff_ds.items()):
-            L = L + loss[id](y)
-        L = L / len(md_aff_ds.items())
+        L = torch.stack([loss[id](y) for id in md_aff_ds]).mean()
         L.backward()
         return L
 
@@ -390,6 +381,8 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
     nt = template.get_lddmm_nt()
 
     # Iterate over the schedule
+    md_temp: MeshData | None = None
+    p_temp: torch.Tensor | None = None
     for i, iter in enumerate(template.get_build_iteration_schedule()):
 
         # Print iteration
@@ -415,8 +408,11 @@ def template_from_ellipsoid_keops(tbs: TemplateBuildWorkspace, template: Templat
 
         # Make the template the new root
         md_root = md_remesh
-
+        
     # Save the template and the momenta
+    if md_temp is None or p_temp is None:
+        raise ValueError("Template build iteration schedule must not be empty")
+    
     pd_temp_save = vtk_clone_pd(md_temp.pd)
     for i, (id, md_i) in enumerate(md_aff.items()):
         vtk_set_point_array(pd_temp_save, f'momenta_{id}', p_temp[i,:,:].detach().cpu().numpy())
@@ -437,17 +433,15 @@ def generate_template_output_folder(tbs: TemplateBuildWorkspace, template: Templ
     vtk_set_cell_array(pd_left, 'plab', lp)
 
     # Compute curvature measures on the template
-    ms = pymeshlab.MeshSet()
-    ms.add_mesh(pymeshlab.Mesh(vertex_matrix=v, face_matrix=f))
+    ms = PyMeshLabInterface.create_meshset_from_arrays_direct(v, f)
 
     # Compute curvatures (not that important)
     for c_id,c_nm in { 0: 'Mean', 1: 'Gaussian', 4: 'ShapeIndex', 5: 'Curvedness' }.items():
-        ms.compute_curvature_principal_directions_per_vertex(
-            method='Scale Dependent Quadric Fitting', 
+        PyMeshLabInterface.compute_curvature_principal_directions_per_vertex(
+            ms, method='Scale Dependent Quadric Fitting',
             curvcolormethod=c_id,
-            scale=pymeshlab.AbsoluteValue(3.0))
-        q = ms.mesh(0)
-        vtk_set_point_array(pd_left, f'Curvature_{c_nm}', ms.mesh(0).vertex_scalar_array())
+            scale=PyMeshLabInterface.absolute_value(3.0))
+        vtk_set_point_array(pd_left, f'Curvature_{c_nm}', PyMeshLabInterface.get_vertex_scalar_array(ms))
 
     # Set the label array in the template by taking argmax over plab
     vtk_set_cell_array(pd_left, 'label', np.argmax(lp, axis=1))
@@ -644,26 +638,33 @@ class BuildTemplateLauncher:
 
     def __init__(self, parse):
 
+        # Input specification
+        parse.add_argument('-M', '--manifest', metavar='csv_file', type=pathlib.Path, required=True,
+                           help='Path to the manifest CSV file describing the input data.'
+                                'The manifest contains columns <id|side|crashs_dir> or '
+                                '<id|side|seg> and optionally [mprage|tse_native_chunk|affine_to_template|affine_tse_to_mprage]. '
+                                'See help for the "fit" command for the meaning of these columns.')        
+        
+        parse.add_argument('-T', '--template-init-dir', metavar='dir', type=pathlib.Path, required=True,
+                           help='Template initial directory structure')
+
         # Add the arguments
         parse.add_argument('-C', '--crashs-data', metavar='dir', type=str,
-                           help='Path of the CRASHS data folder, if CRASHS_DATA not set')
-        parse.add_argument('template_init_dir', help='Template initial directory structure', type=pathlib.Path)
-        parse.add_argument('ashs_json', help='JSON file desribing the input files', type=argparse.FileType('rt'))
-        parse.add_argument('work_dir', metavar='work_dir', type=str, help='Working directory')
-        parse.add_argument('output_dir', metavar='output_dir', type=str, help='Template output directory')
-        parse.add_argument('-f', '--fusion-stage', type=str, choices=['multiatlas', 'bootstrap'], 
-                        help='Which stage of ASHS fusion to select', default='bootstrap')                   
-        parse.add_argument('-c', '--correction-mode', type=str, choices=['heur', 'corr_usegray', 'corr_nogray'], 
-                        help='Which ASHS correction output to select', default='corr_usegray')                   
+                           help='Path of the CRASHS data folder, if using a non-standard CRASHS template')
+
+        parse.add_argument('-w', '--workdir', metavar='dir', type=str, required=True, 
+                           help='Working directory')
+        parse.add_argument('-o', '--outdir', metavar='dir', type=str, required=True, 
+                           help='Template output directory')
         parse.add_argument('-d', '--device', type=str, 
-                        help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
-        parse.add_argument('--skip-preproc', action='store_true',
-                help='Skip the preprocessing step')
+                           help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
+        parse.add_argument('--skip-preproc', action='store_true', help='Skip the preprocessing step')
         parse.add_argument('--no-t2-upsample', action='store_true',
-                        help='Skip the upsampling of ASHS T2 segmentation - use when ASHS outputs nearly isotropic segmentations')
+                           help='Skip the upsampling of ASHS T2 segmentation - use when ASHS outputs nearly isotropic segmentations')
 
         parse.add_argument('--skip-cruise', action='store_true')
         parse.add_argument('--skip-affine', action='store_true')
+        parse.add_argument('--skip-lddmm', action='store_true')
 
         # Set the function to run
         parse.set_defaults(func = lambda args : self.run(args))
@@ -676,8 +677,8 @@ class BuildTemplateLauncher:
         # Load the template
         template = Template(args.template_init_dir)
 
-        # Load the ASHS json
-        ashs_input_desc = json.load(args.ashs_json)
+        # Load the manifest file using pandas
+        df_manifest = pd.read_csv(args.manifest)
 
         # Prepare device
         # device = torch.device(args.device) if torch.cuda.is_available() else 'cpu'
@@ -691,28 +692,36 @@ class BuildTemplateLauncher:
         tbs = TemplateBuildWorkspace(args.work_dir)
 
         # Run basic Nighres for each subject
-        for d in ashs_input_desc:
-            id = d['id']
-            side = d['side']
-
-            # There are two ways to do this. One is that the user provides the ASHS directory
-            # in 'ashs_dir' (or for back-compatibility, 'path') and then we run CRUISE on this
-            # directory and output it into the work directory. Another is that the user supplies
-            # and existing workspace for each subject where CRUISE has already been run
-            if 'crashs_dir' in d:
-                out_dir = d['crashs_dir']
+        for i, row in df_manifest.iterrows():
+            # Read the row and the side
+            id, side = row['id'], row['side']
+            
+            # There are two ways that the template build can be initialized. One is using existing
+            # CRASHS directories with completed preprocessing. The other is the same inputs as the
+            # "fit" command (segmentation, posteriors, etc)
+            workspace: Workspace | None = None
+            if 'crashs_dir' in row:
+                out_dir = row['crashs_dir']
                 workspace = Workspace(out_dir, id, side)
-            else:
+            elif 'seg' in row:
                 # Create the output dir
                 out_dir = os.path.join(args.work_dir, id)
                 os.makedirs(out_dir, exist_ok=True)
                 workspace = Workspace(out_dir, id, side)
                 
                 # Load the ASHS experiment
-                ashs_dir = d['ashs_dir'] if 'ashs_dir' in d else d['path']
-                ashs = ASHSFolder(ashs_dir, side, args.fusion_stage, args.correction_mode)
+                ashs = ASHSFolder(
+                    fn_seg_or_posterior=row['seg'],
+                    side=side,
+                    fn_mprage=row.get('mprage', None),
+                    fn_tse_native_chunk=row.get('tse_native_chunk', None),
+                    fn_affine_to_template=row.get('affine_to_template', None),
+                    fn_affine_tse_to_mprage=row.get('affine_tse_to_mprage', None))
                 ashs.load_posteriors(template)
 
+                # Check if the white matter is present in ASHS
+                have_wm = len([l for l in template.get_labels_for_tissue_class('wm') if l in ashs.posteriors.keys()]) > 0
+                
                 # Determine if the current template requires additional postprocessing steps
                 # to convert the ASHS output into an input suitable for CRASHS
                 if not args.skip_preproc:
@@ -746,6 +755,9 @@ class BuildTemplateLauncher:
                     print("Mapping ASHS labels on the inflated template")
                     cruise_postproc(template, ashs, workspace, 
                                     reduction=template.get_cruise_inflate_reduction())
+            
+            if workspace is None:
+                raise ValueError(f'Could not create workspace for subject {id} side {side}')
 
             # Store the data
             tbs.add_subject(id, workspace, side)
@@ -755,6 +767,9 @@ class BuildTemplateLauncher:
             groupwise_similarity_registration_keops(tbs, template, device=device)
 
         # Run the groupwise code
-        template_from_ellipsoid_keops(tbs, template, device)
+        if not args.skip_lddmm:
+            template_from_ellipsoid_keops(tbs, template, device)
+            
+        # Generate the output folder and finalize the groupwise LDDMM results
         generate_template_output_folder(tbs, template, args.output_dir  )
         finalize_groupwise_keops(tbs, template, device=device)

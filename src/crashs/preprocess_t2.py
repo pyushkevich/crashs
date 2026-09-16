@@ -48,6 +48,8 @@ def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessWorkspace
     plans_manager = PlansManager(plans)
 
     parameters = []
+    configuration_name = None
+    inference_allowed_mirroring_axes = None
     for i, f in enumerate(use_folds):
         f = int(f) if f != 'all' else f
         checkpoint = torch.load(join(nnunet_model, f'fold_{f}', 'checkpoint_final.pth'),
@@ -59,6 +61,9 @@ def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessWorkspace
 
         parameters.append(checkpoint['network_weights'])
 
+    if not configuration_name:
+        raise ValueError("Could not determine configuration name from checkpoint")
+    
     configuration_manager = plans_manager.get_configuration(configuration_name)
 
     # restore network
@@ -86,7 +91,7 @@ def nnunet_wm_inference(template:Template, nnunet_model, ws: PreprocessWorkspace
     
 
 def add_wm_segmentation_to_ashs_t2(
-        ashs:ASHSFolder, template:Template, nnunet_model:str,  ws: PreprocessWorkspace, device):
+        ashs:ASHSFolder, template:Template, nnunet_model:str,  ws: PreprocessT2Workspace, device):
     
     # Read the nnunet options from the preprocessing options
     with open(os.path.join(nnunet_model, 'config.json')) as config_json:
@@ -95,14 +100,21 @@ def add_wm_segmentation_to_ashs_t2(
     # Read the options that affect upsampling
     target_orientation = np.array(nnunet_opts["target_orientation"])
     target_spacing = np.array(nnunet_opts["target_spacing"])
-
-    # Next we need to generate the white matter segmentation. For this, we need the
-    # whole-brain T1-weighted MRI. We extract the ROI around the segmentation and
-    # set the orientation to match that of the nnU-Net training data
+    
+    # Load the matrix used to map from T1 to T2
+    if ashs.affine_tse_to_mprage is None:
+        raise ValueError("Missing affine_tse_to_mprage file, which is required for adding white matter segmentation to T2 ASHS segmentation")
+    
+    # Crop the T1-MRI around the segmentation
     c3d = Convert3D()
-    c3d.execute(f'{ashs.mprage} -as T1  {ashs.tse_native_chunk} -thresh -inf inf 1 0 '
-                f'-int 0 -reslice-matrix {ashs.affine_t1f_t2m} -trim 1vox '
-                f'-push T1 -reslice-identity -swapdim {target_orientation}')
+    c3d.execute(f'{ashs.tse_native_chunk} -thresh -inf inf 1 0')
+        
+    g = Greedy3D()
+    g.execute(f'-threads 1 -rf {ashs.mprage} -ri NN -rm tse_ones tse_ones_reslice -r {ashs.affine_tse_to_mprage},-1', 
+              tse_ones=c3d.pop(), tse_ones_reslice=None)
+    
+    c3d.push(g['tse_ones_reslice'])
+    c3d.execute(f'-trim 1vox {ashs.mprage} -as T1 -reslice-identity -swapdim {target_orientation}')
 
     # The T1 may need to be upsampled to target resolution before running nnU-Net. 
     # We can read from the upsample folder what the target image orientation and
@@ -126,7 +138,7 @@ def add_wm_segmentation_to_ashs_t2(
     g.execute(f'-threads 1 -rf {ws.fn_upsample_output_bin} '
               f'-rm {ws.fn_nnunet_input} {tmppref}_t1sr_to_t2.nii.gz '
               f'-ri LABEL 0.2mm -rm {ws.fn_nnunet_output} {ws.fn_upsample_wm_seg} '
-              f'-r {ashs.affine_t2f_t1m}')
+              f'-r {ashs.affine_tse_to_mprage}')
     
 
 def postprocess_t2_upsample(
@@ -270,7 +282,7 @@ def postprocess_t2_upsample(
 
 
 def postprocess_t1_wm(
-        ashs:ASHSFolder, template:Template, upsample_opts:dict, ws: PreprocessT2Workspace):
+        ashs:ASHSFolder, template:Template, upsample_opts:dict, ws: PreprocessWorkspace):
     
     # Prefix for where to write temporary outouts
     tmppref = f'{ws.output_dir}/tmp/{ws.id}'
@@ -331,6 +343,12 @@ def postprocess_t1_wm(
 
 
 def upsample_t2(cdr: CrashsDataRoot, ashs:ASHSFolder, preproc_opts: dict, ws: PreprocessT2Workspace):
+    
+    # Make sure inputs are provided
+    if not ashs.tse_native_chunk:
+        raise ValueError("TSE native chunk file must be provided when using this CRASHS template")
+    elif not os.path.exists(ashs.tse_native_chunk):
+        raise FileNotFoundError(f"TSE native chunk file {ashs.tse_native_chunk} does not exist") 
     
     # Locate the upsampling model
     upsample_args = argparse.Namespace(

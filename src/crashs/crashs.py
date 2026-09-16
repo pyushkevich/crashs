@@ -349,7 +349,7 @@ def similarity_registration_keops(md_temp, md_subj, n_iter=50, sigma_varifold=10
     opt_affine = torch.optim.LBFGS([pair_theta], max_eval=10, max_iter=10, line_search_fn='strong_wolfe')
 
     # Define closure
-    def closure(detail=False):
+    def closure():
         opt_affine.zero_grad()
 
         R = rotation_from_vector(pair_theta[0:3]) * pair_theta[3]
@@ -362,18 +362,16 @@ def similarity_registration_keops(md_temp, md_subj, n_iter=50, sigma_varifold=10
 
         L = 0.5 * (loss_ab(a_to_b) + loss_ba(b_to_a))
         L.backward()
-        if not detail:
-            return L
-        else:
-            return L, R, b
-    
+        return L, R, b
+        
     # Run the optimization
     for i in range(n_iter):
-        print(f'Affine Iteration {i:03d}  Loss: {closure().item()}')
-        opt_affine.step(closure)
+        loss, R, b = closure()
+        print(f'Affine Iteration {i:03d}  Loss: {loss.item()}')
+        opt_affine.step(lambda : closure()[0])
 
     # Return the loss and the transformation parameters
-    loss, R, b = closure(True)
+    loss, R, b = closure()
     affine_mat = np.eye(4)
     affine_mat[0:3,0:3] = R.detach().cpu().numpy()
     affine_mat[0:3,  3] = b.detach().cpu().numpy()
@@ -532,7 +530,7 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
         vtk_set_point_array(pd, 'Momentum', p_temp.cpu().detach().numpy())
         vtk_set_field_data(pd, 'lddmm_sigma', template.get_lddmm_sigma())
         vtk_set_field_data(pd, 'lddmm_nt', nt)
-        vtk_set_field_data(pd, 'lddmm_ralston', 1.)
+        vtk_set_field_data(pd, 'lddmm_ralston', np.array(1.))
         save_vtk(pd, workspace.fit_lddmm_momenta)
 
         # We now need to combine the affine and deformable components to bring the mesh
@@ -557,116 +555,6 @@ def subject_to_template_registration(template:Template, workspace: Workspace, de
     # into the space of the subject
     #A_inv = np.linalg.inv(affine_mat[:3,:3])
     #b_inv = - A_inv @ affine_mat[:3,3:]
-
-
-def subject_to_template_fit_omt(template:Template, workspace: Workspace, device):
-
-    # Load the fitted template mesh
-    pd_fitted = load_vtk(workspace.fit_lddmm_result)
-    md_fitted = MeshData(pd_fitted, device)
-
-    # Load the target subject mesh
-    pd_subject = load_vtk(workspace.fit_target)
-    md_subject = MeshData(pd_subject, device)
-
-    # # Compute the centers and weights of the fitted model and target model
-    # def to_measure(points, triangles):
-    #     """Turns a triangle into a weighted point cloud."""
-
-    #     # Our mesh is given as a collection of ABC triangles:
-    #     A, B, C = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
-
-    #     # Locations and weights of our Dirac atoms:
-    #     X = (A + B + C) / 3  # centers of the faces
-    #     S = torch.sqrt(torch.sum(torch.cross(B - A, C - A) ** 2, dim=1)) / 2  # areas of the faces
-
-    #     # We return a (normalized) vector of weights + a "list" of points
-    #     return S / torch.sum(S), X
-
-    # # Compute optimal transport matching
-    # (a_src, x_src) = to_measure(md_fitted.vt, md_fitted.ft)
-    # (a_trg, x_trg) = to_measure(md_subject.vt, md_subject.ft)
-    # x_src.requires_grad_(True)
-    # x_trg.requires_grad_(True)
-
-    # # Generate correspondence between models using OMT
-    # t_start = time.time()
-    # w_loss = geomloss.SamplesLoss("sinkhorn", p=2, blur=0.05, scaling=0.8, backend='multiscale', verbose=True)
-    # w_loss_value = w_loss(a_src, x_src, a_trg, x_trg)
-    # print('Forward pass completed')
-    # [w_loss_grad] = torch.autograd.grad(w_loss_value, x_src)
-    # w_match = x_src - w_loss_grad / a_src[:, None]
-    # t_end = time.time()
-    
-    # print(f'OMT matching distance: {w_loss_value.item()}, time elapsed: {t_end-t_start}')
-    
-    # # The matches are the locations where the centers of the triangles want to move to
-    # # on the target mesh. Now we need to map this into the corresponding point matches
-    # pd_test_sinkhorn = vtk_clone_pd(pd_fitted)
-    # vtk_set_cell_array(pd_test_sinkhorn, 'match', w_match.detach().cpu().numpy())
-    # filter = vtk.vtkCellDataToPointData()
-    # filter.SetInputData(pd_test_sinkhorn)
-    # filter.Update()
-    # vtk_set_points(pd_test_sinkhorn, vtk_get_point_array(filter.GetOutput(), 'match'))
-    # save_vtk(pd_test_sinkhorn, workspace.fit_omt_match)
-
-    # The last thing we want to do is to project template sampling locations into the
-    # halfway surface in the subject native space
-    pd_hw = load_vtk(workspace.cruise_middepth_mesh)
-
-    # Apply RAS transform to the halfway mesh from CRUISE
-    _, img_ref = next(iter(ashs.posteriors.items()))
-    sform = get_image_sform(img_ref)
-    x_hw = vtk_get_points(pd_hw) @ sform[:3,:3].T + sform[:3,3:].T
-    vtk_set_points(pd_hw, x_hw)
-
-    # Also load the label probability maps 
-    plab_hw = vtk_get_cell_array(load_vtk(workspace.cruise_infl_mesh_labeled), 'plab')
-    vtk_set_cell_array(pd_hw, 'plab', plab_hw)
-    save_vtk(pd_hw, workspace.fit_omt_hw_target)
-
-    # Which mesh to use for sampling
-    pd_sample = pd_fitted 
-    # pd_sample = pd_test_sinkhorn
-
-    # Use the locator to sample from the halfway mesh
-    loc = vtk.vtkCellLocator()
-    loc.SetDataSet(pd_subject)
-    loc.BuildLocator()
-    x = vtk_get_points(pd_fitted)
-    x_to_subj = np.zeros_like(x)
-    x_dist = np.zeros(x.shape[0])
-    
-    cellId = vtk.reference(0)
-    c = [0.0, 0.0, 0.0]
-    subId = vtk.reference(0)
-    d = vtk.reference(0.0)
-    pcoord = [0.0, 0.0, 0.0]
-    wgt = [0.0, 0.0, 0.0]
-    xj = [0.0, 0.0, 0.0]
-    for j in range(x.shape[0]):
-        loc.FindClosestPoint(x[j,:], c, cellId, subId, d)
-        pd_subject.GetCell(cellId).EvaluatePosition(x[j,:], c, subId, pcoord, d, wgt)
-        pd_hw.GetCell(cellId).EvaluateLocation(subId, pcoord, xj, wgt)
-        x_to_subj[j,:] = np.array(xj)
-        x_dist[j] = np.sqrt(d.get())
-
-    # Save the template locations in halfway mesh
-    vtk_set_points(pd_fitted, x_to_subj)
-    vtk_set_point_array(pd_fitted, 'dist', x_dist)
-    save_vtk(pd_fitted, workspace.fit_omt_match_to_hw)
-
-    # Compute distance statistics
-    dist_stat = {
-        'mean': np.mean(x_dist),
-        'rms': np.sqrt(np.mean(x_dist ** 2)),
-        'q95': np.quantile(x_dist, 0.95),
-        'max': np.max(x_dist)
-    }
-
-    # Write distance statistics
-    with open(workspace.fit_dist_stat, 'wt') as jsonfile:
-        json.dump(dist_stat, jsonfile)
 
 
 def omt_match_fitted_template_to_target(pd_fitted, pd_target, pd_target_native, device):
@@ -801,23 +689,41 @@ class FitLauncher:
 
     def __init__(self, parse):
 
-        # Add the arguments
-        parse.add_argument('ashs_dir', metavar='ashs_dir', type=pathlib.Path, 
-                        help='ASHS output directory')
-        parse.add_argument('template', metavar='template', type=str, 
-                        help='Name of the CRASHS template (folder in $CRASHS_DATA/templates)')
-        parse.add_argument('output_dir', metavar='output_dir', type=str, 
-                        help='Output directory to save images')
-        parse.add_argument('-C', '--crashs-data', metavar='dir', type=str,
-                           help='Path of the CRASHS data folder, if CRASHS_DATA not set')
+        # Input arguments
+        parse.add_argument('-S', '--seg', type=str, 
+                           help='Multi-label segmentatation generated by ASHS or a filename pattern specifying ASHS posteriors. '
+                                'If a pattern is specified, it should contain %%03d as part of the pattern, which will be '
+                                'replaced by the label index to find the corresponding posterior probability map. ')
+        parse.add_argument('--mprage', type=pathlib.Path,
+                           help='Path to the MPRAGE image. '
+                                'Optional, only used if white matter label needs to be added to ASHS segmentation.')
+        parse.add_argument('--tse-native-chunk', type=pathlib.Path,
+                           help='Path to TSE native chunk image. '
+                                'Optional, only used if TSE needs to be upsampled (old ASHS, anisotropic TSE)')
+        parse.add_argument('-A', '--affine-to-template', type=pathlib.Path,
+                           help='Path to a .mat file specifying affine transform from subject to template. '
+                                'Optional, CRASHS can usually find the affine transform on its own. '
+                                'In ASHS, this is t1_to_template_affine.mat')
+        parse.add_argument('--affine-tse-to-mprage', type=pathlib.Path,
+                           help='Path to a .mat file specifying affine transform from between T2 and T1-MRI. '
+                                'Optional, only used if white matter label needs to be added to ASHS segmentation. '
+                                'In ASHS, this is flirt_t2_to_t1.mat')
+        parse.add_argument('-s', '--side', type=str, required=True, choices=['left', 'right'], 
+                           help='Side of the brain (left or right). If not specified, will be inferred from the filename specified with -S.')
         parse.add_argument('-i', '--id', metavar='id', type=str, 
-                        help='Experiment id, defaults to output directory basename')
-        parse.add_argument('-s', '--side', type=str, choices=['left', 'right'], 
-                        help='Side of the brain', default='left')
-        parse.add_argument('-f', '--fusion-stage', type=str, choices=['multiatlas', 'bootstrap'], 
-                        help='Which stage of ASHS fusion to select', default='bootstrap')                   
-        parse.add_argument('-c', '--correction-mode', type=str, choices=['heur', 'corr_usegray', 'corr_nogray'], 
-                        help='Which ASHS correction output to select', default='corr_usegray')                   
+                           help='Experiment id, defaults to output directory basename')
+
+        # Template arguments        
+        parse.add_argument('-T', '--template', metavar='template', type=str, 
+                           help='Name of the CRASHS template')
+        parse.add_argument('-C', '--crashs-data', metavar='dir', type=str,
+                           help='Path of the CRASHS data folder, if using a non-standard CRASHS template')
+        
+        # Output arguments
+        parse.add_argument('-w', '--workdir', metavar='dir', type=str, 
+                           help='Work directory to save images and intermediate outputs')
+        
+        # Optional parameters
         parse.add_argument('-d', '--device', type=str, 
                         help='PyTorch device to use (cpu, cuda0, etc)', default='cpu')
         parse.add_argument('-K', '--keops', action='store_true',
@@ -828,6 +734,8 @@ class FitLauncher:
                         help='Pruning factor applied to the Voronoi skeleton during thickness computation, see cmrep_vskel option -p')
         parse.add_argument('--lddmm-iter', type=int, default=None,
                         help='Number of iterations for geodesic shooting')
+        
+        # Stage specification
         parse.add_argument('--skip-preproc', action='store_true',
                         help='Skip the preprocessing step')
         parse.add_argument('--skip-cruise', action='store_true',
@@ -838,6 +746,8 @@ class FitLauncher:
                         help='Skip the optimal transport matching step')
         parse.add_argument('--skip-thick', action='store_true',
                         help='Skip the thickness computation step')
+        
+        # Processing tweaks
         parse.add_argument('--no-t2-upsample', action='store_true',
                         help='Skip the upsampling of ASHS T2 segmentation - use when ASHS outputs nearly isotropic segmentations')
         parse.add_argument('--no-wm-nnunet', action='store_true',
@@ -859,19 +769,23 @@ class FitLauncher:
             reduction = args.reduction
 
         # Load the ASHS experiment
-        ashs = ASHSFolder(args.ashs_dir, args.side, args.fusion_stage, args.correction_mode)
+        ashs = ASHSFolder(fn_seg_or_posterior=args.seg, 
+                          side=args.side,
+                          fn_mprage=args.mprage, 
+                          fn_tse_native_chunk=args.tse_native_chunk,
+                          fn_affine_to_template=args.affine_to_template,
+                          fn_affine_tse_to_mprage=args.affine_tse_to_mprage)
         ashs.load_posteriors(template)
 
         # Create the output workspace
-        expid = args.id if args.id is not None else os.path.basename(args.output_dir)
-        workspace = Workspace(args.output_dir, expid, args.side)
+        expid = args.id if args.id is not None else os.path.basename(args.workdir)
+        workspace = Workspace(args.workdir, expid, args.side)
         
         # Write a log for this CRASHS run
         logging.basicConfig(filename=workspace.fn_logfile(), level=logging.INFO)
         
         # Check if the white matter is present in ASHS
-        have_wm = len([l for l in template.get_labels_for_tissue_class('wm') 
-                       if l in ashs.posteriors.keys()]) > 0
+        have_wm = len([l for l in template.get_labels_for_tissue_class('wm') if l in ashs.posteriors.keys()]) > 0
 
         # Determine the device to use in torch
         device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')

@@ -10,7 +10,7 @@ import copy
 import shutil
 import datetime
 
-
+from typing import Literal
 from crashs.vtkutil import *
 
 # Class that represents a surface mesh for use in PyTorch
@@ -200,37 +200,35 @@ def find_file(fullpath, missing='e'):
     else:
         raise FileNotFoundError(f'File {fullpath} not found')
 
-        
-# Class to represent an ASHS output folder and the files that we need from
-# ASHS for this script
+
 class ASHSFolder:
-
-    def __init__(self, ashs_dir, side, fusion_mode, correction_mode):
-
-        self.ashs_dir = ashs_dir
-        self.side = side
-        self.fusion_mode = fusion_mode
-        self.correction_mode = correction_mode
-
-        # How posteriors are coded
-        pstr = 'posterior' if correction_mode == 'heur' else f'posterior_{correction_mode}'
-
-        # Locate the posteriors
-        self.posterior_pattern = os.path.join(ashs_dir, f'{fusion_mode}/fusion/{pstr}_{side}_%03d.nii.gz')
-                
-        # Find the MPRAGE
-        self.mprage = find_file(f'{ashs_dir}/mprage.nii.gz','w')
+    
+    def __init__(self, 
+                 fn_seg_or_posterior:str, 
+                 side:Literal['left','right'],
+                 fn_mprage:str|None=None,
+                 fn_tse_native_chunk:str|None=None,
+                 fn_affine_to_template:str|None=None,
+                 fn_affine_tse_to_mprage:str|None=None):
         
-        # Find the final segmentation if the posteriors are not available
-        self.final_seg = find_unique_file_with_suffix(f'{ashs_dir}/final', f'_{side}_lfseg_{correction_mode}.nii.gz','w')
-
-        # Find the TSE native chunk image
-        self.tse_native_chunk = find_file(f'{ashs_dir}/tse_native_chunk_{side}.nii.gz','w')
-
-        # Required matrix files
-        self.affine_to_template = find_file(f'{ashs_dir}/affine_t1_to_template/t1_to_template_affine.mat','e')
-        self.affine_t2f_t1m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1.mat','w')
-        self.affine_t1f_t2m = find_file(f'{ashs_dir}/flirt_t2_to_t1/flirt_t2_to_t1_inv.mat','w')
+        # Load the posteriors if we are given a posterior pattern or a final segmentation
+        if os.path.exists(fn_seg_or_posterior):
+            self.posterior_pattern = None
+            self.final_seg = fn_seg_or_posterior
+        elif '%' in fn_seg_or_posterior and (fn_seg_or_posterior % 0 != fn_seg_or_posterior % 1):
+            self.posterior_pattern = fn_seg_or_posterior
+            self.final_seg = None
+        else:
+            raise FileNotFoundError(f'ASHS segmentation or posterior pattern {fn_seg_or_posterior} not found')
+            
+        # Assign the mprage, tse chunk, and affine matrices
+        self.mprage = fn_mprage
+        self.tse_native_chunk = fn_tse_native_chunk
+        self.affine_to_template = fn_affine_to_template
+        self.affine_tse_to_mprage = fn_affine_tse_to_mprage
+        
+        # If side is not specified try to infer it
+        self.side = side
 
     def set_alternate_posteriors(self, pattern):
         self.posterior_pattern = pattern
@@ -239,16 +237,21 @@ class ASHSFolder:
 
         # Load the posteriors from posterior files
         self.posteriors = {}
-        for lab in ['wm', 'gm', 'bg']:
-            for v in template.get_labels_for_tissue_class(lab):
-                img=self.posterior_pattern % (v,)
-                if os.path.exists(img):
-                    self.posteriors[v] = sitk.ReadImage(img)
+        if self.posterior_pattern is not None:
+            for lab in ['wm', 'gm', 'bg']:
+                n_post = 0
+                for v in template.get_labels_for_tissue_class(lab):
+                    img=self.posterior_pattern % (v,)
+                    if os.path.exists(img):
+                        self.posteriors[v] = sitk.ReadImage(img)
+                        n_post += 1
+                        
+                if n_post == 0:
+                    raise FileNotFoundError(f'No posteriors found for tissue class {lab} using pattern {self.posterior_pattern}')
+                    
 
         # If the posteriors do not exist, load them from final segmentation instead
-        if len(self.posteriors) == 0:
-            if self.final_seg is None:
-                raise FileNotFoundError('No posteriors or final segmentation found in ASHS folder')
+        elif self.final_seg is not None:
             
             # Typically we want to crop the final segmentation to the final chunk but if we don't have
             # that, then we use the image without cropping
@@ -262,42 +265,10 @@ class ASHSFolder:
                     c3d.execute(f'-push X -thresh {v} {v} 1 0')
                     post = c3d.pop()
                     if np.count_nonzero(sitk.GetArrayFromImage(post)) > 0:
-                        self.posteriors[v] = post
+                        self.posteriors[v] = post    
                         
-
-# This method creates a dummy ASHS folder from a single segmentation
-def make_ashs_folder(fn_segmentation:str, id:str, side:str, fn_output_dir:str,
-                     fn_tse_chunk:str=None, fn_mprage:str=None,
-                     fn_affine_to_template=None, 
-                     correction_mode='heur'):
-    
-    
-    # Copy the segmentation with the correct name into the folder
-    c3d = Convert3D()
-    for sub in 'final', 'flirt_t2_to_t1', 'affine_t1_to_template':
-        os.makedirs(f'{fn_output_dir}/{sub}', exist_ok=True)
-    
-    # Save the segmentation
-    fn_out_seg = f'{fn_output_dir}/final/{id}_{side}_lfseg_{correction_mode}.nii.gz'
-    c3d.execute(f'{fn_segmentation} -type short -o {fn_out_seg}')
-    
-    # Save the TSE and MPRAGE
-    if fn_tse_chunk:
-        c3d.execute(f'{fn_tse_chunk} -o {fn_output_dir}/tse_native_chunk_{side}.nii.gz')
-    if fn_mprage:
-        c3d.execute(f'{fn_mprage} -o {fn_output_dir}/mprage.nii.gz.nii.gz')
-        
-    # Save the affine to template matrix
-    fn_out_affine_to_template = f'{fn_output_dir}/affine_t1_to_template/t1_to_template_affine.mat'
-    if fn_affine_to_template:
-        shutil.copy(fn_affine_to_template, fn_out_affine_to_template)
-    else:
-        np.savetxt(fn_out_affine_to_template, np.eye(4))
-        
-    # Return the ASHS folder for this
-    return ASHSFolder(fn_output_dir, side, 'bootstrap', correction_mode)
-        
-                      
+        else:
+            raise FileNotFoundError('No posteriors or final segmentation provided')
 
     
 class Workspace:

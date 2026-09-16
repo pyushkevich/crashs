@@ -1,64 +1,8 @@
 import vtk
 from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
-import pymeshlab
+from crashs.meshlab import PyMeshLabInterface
 import numpy as np
 import SimpleITK as sitk
-import tempfile
-import os
-
-# We need to create some aliases for pymeshlab functions and classes because of the
-# changing API and issues with compatibility on older systems
-class PyMeshLabInterface:
-
-    @staticmethod
-    def percentage(x):
-        return pymeshlab.PercentageValue(x) if hasattr(pymeshlab, 'PercentageValue') else pymeshlab.Percentage(x)
-    
-    @staticmethod
-    def meshing_isotropic_explicit_remeshing(ms:pymeshlab.MeshSet, **kwargs):
-        if hasattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing') and callable(getattr(pymeshlab.MeshSet, 'meshing_isotropic_explicit_remeshing')):
-            ms.meshing_isotropic_explicit_remeshing(**kwargs)
-        else:
-            ms.remeshing_isotropic_explicit_remeshing(**kwargs)
-
-    @staticmethod
-    def meshing_decimation_quadric_edge_collapse(ms:pymeshlab.MeshSet, **kwargs):
-        if hasattr(pymeshlab.MeshSet, 'meshing_decimation_quadric_edge_collapse') and callable(getattr(pymeshlab.MeshSet, 'meshing_decimation_quadric_edge_collapse')):
-            ms.meshing_decimation_quadric_edge_collapse(**kwargs)
-        else:
-            ms.simplification_quadric_edge_collapse_decimation(**kwargs)
-
-    @staticmethod
-    def apply_coord_taubin_smoothing(ms:pymeshlab.MeshSet, **kwargs):
-        if hasattr(pymeshlab.MeshSet, 'apply_coord_taubin_smoothing') and callable(getattr(pymeshlab.MeshSet, 'apply_coord_taubin_smoothing')):
-            ms.apply_coord_taubin_smoothing(**kwargs)
-        else:
-            ms.taubin_smooth(**kwargs)
-            
-    @staticmethod
-    def meshing_surface_subdivision_loop(ms:pymeshlab.MeshSet, **kwargs):
-        if hasattr(pymeshlab.MeshSet, 'meshing_surface_subdivision_loop') and callable(getattr(pymeshlab.MeshSet, 'meshing_surface_subdivision_loop')):
-            ms.meshing_surface_subdivision_loop(**kwargs)
-        else:
-            ms.subdivision_surfaces_loop(**kwargs)
-
-    @staticmethod
-    def add_mesh_to_meshset(ms:pymeshlab.MeshSet, v, f):
-        # TODO: there is a bug with pymeshlab (https://github.com/cnr-isti-vclab/PyMeshLab/issues/392) where
-        # calling the Mesh constructor results in a segfault. This is an inefficient workaround
-        pd = vtk_make_pd(v, f)
-        handle, fn = tempfile.mkstemp(suffix='mesh.obj')
-        os.close(handle)
-
-        w = vtk.vtkOBJWriter()
-        w.SetFileName(fn)
-        w.SetInputData(pd)
-        w.Update()
-
-        # m = pymeshlab.Mesh(vertex_matrix=v, 
-        #                   face_matrix=f)
-        ms.load_new_mesh(fn)
-        os.remove(fn)
 
 # Read VTK mesh
 def load_vtk(filename) -> vtk.vtkPolyData:
@@ -257,8 +201,7 @@ def vtk_apply_sform(pd, sform,
 def decimate(v, f, target_faces):
 
     # Create a mesh set with the input mesh
-    ms = pymeshlab.MeshSet()
-    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
+    ms = PyMeshLabInterface.create_meshset_from_arrays(v, f)
 
     # Perform decimation
     tf = int(target_faces * f.shape[0]) if target_faces < 1.0 else int(target_faces)
@@ -266,26 +209,24 @@ def decimate(v, f, target_faces):
     PyMeshLabInterface.meshing_decimation_quadric_edge_collapse(
         ms, targetfacenum=tf, preserveboundary=True, preservenormal=True,
         preservetopology=True, planarquadric=True)
-    m0 = ms.mesh(0)
-    print(f'Decimation complete, {m0.face_matrix().shape[0]} faces')
+    v0, f0 = PyMeshLabInterface.get_mesh_vf(ms)
+    print(f'Decimation complete, {f0.shape[0]} faces')
 
     # Create a new pd with the vertices and vaces
-    return m0.vertex_matrix(), m0.face_matrix()
-    
+    return v0, f0
+
 
 # Taubin smoothing using MeshLab
 def taubin_smooth(v, f, lam, mu, steps):
-    
-    # Create a pymeshlab mesh and add all the arrays to it    
-    ms = pymeshlab.MeshSet()
-    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
+
+    # Create a pymeshlab mesh and add all the arrays to it
+    ms = PyMeshLabInterface.create_meshset_from_arrays(v, f)
 
     # Perform Taubin smoothing
     PyMeshLabInterface.apply_coord_taubin_smoothing(ms, lambda_ = lam, mu = mu, stepsmoothnum = steps)
 
     # Create a new pd with the vertices and vaces
-    m0 = ms.mesh(0)
-    return m0.vertex_matrix(), m0.face_matrix()
+    return PyMeshLabInterface.get_mesh_vf(ms)
 
 
 # Map an array to new vertex locations
@@ -372,24 +313,20 @@ def extract_zero_levelset(img_levelset, edge_len_pct=1.0, to_ras=True):
     pd_cubes = tri2.GetOutput()
 
     # Apply remeshing to the template
-    ms = pymeshlab.MeshSet()
-    ms = pymeshlab.MeshSet()
-    PyMeshLabInterface.add_mesh_to_meshset(ms, vtk_get_points(pd_cubes), vtk_get_triangles(pd_cubes))
+    ms = PyMeshLabInterface.create_meshset_from_arrays(vtk_get_points(pd_cubes), vtk_get_triangles(pd_cubes))
     PyMeshLabInterface.meshing_isotropic_explicit_remeshing(
         ms, targetlen = PyMeshLabInterface.percentage(edge_len_pct))
-    v_remesh, f_remesh = ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+    v_remesh, f_remesh = PyMeshLabInterface.get_mesh_vf(ms)
     return vtk_make_pd(v_remesh, f_remesh)
 
 
 def isotropic_explicit_remeshing(v, f, **kwargs):
-    ms = pymeshlab.MeshSet()
-    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
+    ms = PyMeshLabInterface.create_meshset_from_arrays(v, f)
     PyMeshLabInterface.meshing_isotropic_explicit_remeshing(ms, **kwargs)
-    return ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+    return PyMeshLabInterface.get_mesh_vf(ms)
 
 def loop_subdivision(v, f, iterations=1):
-    ms = pymeshlab.MeshSet()
-    PyMeshLabInterface.add_mesh_to_meshset(ms, v, f)
+    ms = PyMeshLabInterface.create_meshset_from_arrays(v, f)
     PyMeshLabInterface.meshing_surface_subdivision_loop(ms, iterations=iterations)
-    return ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix()
+    return PyMeshLabInterface.get_mesh_vf(ms)
     
