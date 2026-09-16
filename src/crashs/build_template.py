@@ -88,7 +88,7 @@ class TemplateBuildWorkspace:
 def groupwise_similarity_registration_keops(tbs: TemplateBuildWorkspace, template: Template, device):
 
     # From the template directory, load the left/right flip file. 
-    flip_lr = np.loadtxt(os.path.join(template.root, 'ashs_template_flip.mat'))
+    flip_lr = template.get_left_right_flip_matrix()
 
     # Set the sigma tensors
     sigma_varifold = torch.tensor([template.get_varifold_sigma()], dtype=torch.float32, device=device)
@@ -450,7 +450,7 @@ def generate_template_output_folder(tbs: TemplateBuildWorkspace, template: Templ
     save_vtk(pd_left, f'{out_dir}/template_shoot_left.vtk')
 
     # Apply a flip to the left template
-    flip_lr = np.loadtxt(os.path.join(template.root, 'ashs_template_flip.mat'))
+    flip_lr = template.get_left_right_flip_matrix()
     pd_right = vtk_clone_pd(pd_left)
     vtk_set_points(pd_right, np.einsum('ij,kj->ki', flip_lr[:3,:3].T, v) + flip_lr[:3,3])
     save_vtk(pd_right, f'{out_dir}/template_shoot_right.vtk')
@@ -726,6 +726,7 @@ class BuildTemplateLauncher:
                 # to convert the ASHS output into an input suitable for CRASHS
                 if not args.skip_preproc:
                     if template.get_preprocessing_mode() == 't2_alveus':
+                        # Whether the T2 segmentation is meant to be upsampled when using this template
                         fn_preproc = f'{workspace.preproc_dir}/t2_alveus'
                         print("Performing ASHS-T2 preprocessing steps (alveus WM wrap)")
                         upsampled_posterior_pattern = import_ashs_t2(cdr, ashs, template, fn_preproc, id, device, skip_upsample_t2=args.no_t2_upsample)

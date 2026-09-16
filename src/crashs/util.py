@@ -106,10 +106,19 @@ class Template :
                 self.json = merge_dicts(self.json, json.load(template_json))     
         else:
             print(f'Template directory does not contain template.json file. Using default settings.')
-
+            
+        # Load the left-right flip matrix if it exists, otherwise assign to default
+        local_flip_mat_fn = os.path.join(template_dir, 'ashs_template_flip.mat')
+        if os.path.exists(local_flip_mat_fn):
+            self.flip_mat = np.loadtxt(local_flip_mat_fn)
+        else:
+            self.flip_mat = np.array([[-1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
 
     def get_mesh(self, side):
         return os.path.join(self.root, self.json['sides'][side]['mesh'])
+    
+    def get_left_right_flip_matrix(self):
+        return self.flip_mat
     
     def get_reduced_mesh_for_lddmm(self, side):
         mesh = self.json['sides'][side].get('mesh_reduced', None)
@@ -171,6 +180,9 @@ class Template :
     
     def get_preprocessing_mode(self):
         return self.json.get('preprocessing', dict()).get('mode', None)
+
+    def get_preprocessing_t2_upsample_mode(self):
+        return self.json.get('preprocessing', dict()).get('upsample_t2', True)
 
     def get_white_matter_nnunet_model(self):
         return self.json.get('preprocessing', dict()).get('nnunet_wm', None)
