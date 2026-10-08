@@ -24,7 +24,7 @@ dependencies = [
   'picsl_cmrep>=1.0.4.0',
   'crashs-cbstools-bindings>=0.1.1',
   'nnunetv2>=2.3.1',
-  'acvl_utils==0.2',
+  'acvl_utils>=0.2',
   'blosc2',
   'python-gdcm==3.0.23.1',
   'huggingface_hub==0.36.0'
