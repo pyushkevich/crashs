@@ -68,37 +68,24 @@ The table below provides a more specific reference
 
 Abbreviations: P: posteriors, S: segmentation, A: affine_to_template, MPR: mprage
 
-## Running CRASHS on a sample dataset
+## Running CRASHS on sample datasets
 
 A sample dataset is included in the `sample_data` folder in the repository. Download it to some folder on your system (we will use `/my/crashs/folder/sample_data` for this tutorial). 
 
-### Instructions for Docker
+### Example dataset "subj01"
 
-Run this command inside of the container to run CRASHS on the example T1-ASHS segmentation.
-
-```sh
-python3 -m crashs fit \
-    -C /package -s right -c corr_usegray \
-    sample_data/ashs_pmc_t1/subj01/ashs \
-    ashs_pmc_t1 \
-    sample_data/ashs_pmc_t1/subj01/crashs
-```
-
-You should find the output from running CRASHS in folder `/my/crashs/folder/sample_data/ashs_pmc_t1/subj01` on your system.
-
-### Instructions for `pip` install
-
-If using CRASHS installed with `pip` and the `CRASHS_DATA` environment variable has been set as explained above, use the command below to run CRASHS on the on the example T1-ASHS segmentation:
+This dataset contains anonymized and defaced output from **original ASHS** with the **ASHS-PMC-T1 atlas** extended with the white matter label. When running CRASHS on this dataset, we are supplying the per-label posteriors (-S) in the `bootstrap/fusion` folder. We also supply the affine t1-to-template matrix (-A), which is an optional CRASHS input:
 
 ```sh
 python3 -m crashs fit \
-    -s right -c corr_usegray \
-    /my/crashs/folder/sample_data/ashs_pmc_t1/subj01/ashs \
-    ashs_pmc_t1 \
-    /my/crashs/folder/sample_data/ashs_pmc_t1/subj01/crashs
+    -S /my/crashs/folder/ashs_pmc_t1/subj01/ashs/bootstrap/fusion/posterior_corr_usegray_right_%03d.nii.gz \
+    -A /my/crashs/folder/ashs_pmc_t1/subj01/ashs/affine_t1_to_template/t1_to_template_affine.mat \
+    -i subj01 -s right \
+    -T ashs_pmc_t1 \
+    -w /my/crashs/folder/sample_data/ashs_pmc_t1/subj01/crashs    
 ```
 
-You should find the output from running CRASHS in folder `/my/crashs/folder/sample_data/ashs_pmc_t1/subj01/crashs`.
+You will find the output from running CRASHS in folder `/my/crashs/folder/sample_data/ashs_pmc_t1/subj01/crashs`.
 
 ### T2 Example
 
@@ -157,6 +144,53 @@ The options starting with `--skip` are used to skip certain steps when re-runnin
 * Yushkevich PA, Ittyerah R, Li Y, et al. Morphometry of medial temporal lobe subregions using high-resolution T2-weighted MRI in ADNI3: Why, how, and what's next? Alzheimer's Dement. 2024; 20: 8113–8128. https://doi.org/10.1002/alz.14161
 
 * PA Yushkevich, L Xie, LEM Wisse, et al., Mapping Medial Temporal Lobe Longitudinal Change in Preclinical Alzheimer’s Disease, 2023 Alzheimer's Association International Conference (AAIC 2023).
+
+## Building a Template
+
+New templates are constructed using the `python -m crashs build` command. Before building the template, you need to create two files: a manifest file and an initial `template.json` file
+
+### Manifest File
+
+### Template descriptor (template.json) file
+
+This file contains crucial parameters for building the template. It specifies which labels in the ASHS/hrASHS segmentation correspond to gray matter, white matter and background; which of these labels are used during LDDMM surface matching; various CRUISE parameters; and various template-building and registration parameters.  
+
+```json
+{
+    "ashs_label_type": {
+        "wm": [10],
+        "gm": [1, 3],
+        "bg": [0, 5]
+    },
+    "labels_for_surface_matching": [10, 1, 3],
+    "cruise": {
+        "inflate_maxiter": 2000,
+        "inflate_reduction": 4000,
+        "laminar_n_layers": 10,
+        "laminar_method": "distance-preserving"
+    },
+    "template_build": {
+        "schedule": [
+            10,
+            10,
+            20,
+            200
+        ],
+        "remeshing_edge_length_pct": 2.0,
+        "remeshing_feature_angle": 180.0,
+        "root_sigma_factor": 2.4
+    },
+    "registration": {
+        "varifold_sigma": 2.0,
+        "lddmm_sigma": 2.0,
+        "lddmm_gamma": 0.05,
+        "lddmm_nt": 10,
+        "jacobian_penalty": 10.0,
+        "lddmm_maxiter": 250,
+        "affine_maxiter": 50
+    }
+}
+```
 
 ## Troubleshooting
 
